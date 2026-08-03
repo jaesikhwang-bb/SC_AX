@@ -1,0 +1,125 @@
+version: "1.2.0"
+released_at: "2026-07-31"
+agent_code: "RP"
+
+prompt_files:
+  - "system.md"
+  - "scenarios/01_rp_documents.md"
+  - "scenarios/02_apartment_management_fee_rp_eligibility.md"
+  - "scenarios/03_performance_summary.md"
+  - "scenarios/04_composite_conversion.md"
+
+model:
+  temperature: 0
+
+parameter_definitions:
+  address:
+    description: "아파트명 또는 읍면동 기반 검색값. 질문에 없으면 null"
+  closing_year_month:
+    description: "마감작업년월. 반드시 YYYYMM 형식이며 질문에 없으면 null"
+    pattern: "^[0-9]{6}$"
+  reference_date:
+    description: "기준일자. 반드시 YYYYMMDD 형식이며 질문에 없으면 null"
+    pattern: "^[0-9]{8}$"
+
+scenarios:
+  - code: "RP_DOCUMENTS"
+    name: "RP 업무 문서 조회"
+    description: "RP 관련 신청 기준, 절차, 제한사항 및 운영 정책을 문서에서 조회"
+    details:
+      - code: "RP_DOCUMENT_SEARCH"
+        name: "RP 업무 기준 및 정책 조회"
+        description: "RP 관련 업무 기준과 정책을 승인된 문서에서 검색하여 안내"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules: {}
+
+  - code: "APARTMENT_MANAGEMENT_FEE_RP_ELIGIBILITY"
+    name: "아파트관리비 RP 연결 가능 단지 조회"
+    description: "아파트명 또는 읍면동을 기준으로 관리비 RP 연결 가능 단지를 조회"
+    details:
+      - code: "APARTMENT_RP_LIST"
+        name: "아파트관리비 RP 연결 가능 목록 조회"
+        description: "검색값이 포함된 아파트 중 관리비 자동납부 연결 가능 단지를 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          address:
+            default: "NONE"
+
+  - code: "PERFORMANCE_SUMMARY"
+    name: "실적 종합조회"
+    description: "로그인한 카드 모집인 본인의 전체 환산점수와 실적건수를 조회"
+    details:
+      - code: "PERFORMANCE_SUMMARY_TOTAL"
+        name: "실적 종합 조회"
+        description: "로그인한 카드 모집인 본인의 환산점수와 실적건수를 종합 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "CURRENT_MONTH"
+          reference_date:
+            default: "NONE"
+        clear_when_present:
+          closing_year_month: "reference_date"
+
+  - code: "COMPOSITE_CONVERSION"
+    name: "복합환산조회"
+    description: "복합판매 구분코드별 환산점수·실적 건수와 환산 미반영 내역 조회"
+    details:
+      - code: "COMPOSITE_CONVERSION_SCORE"
+        name: "복합판매 구분코드별 환산점수 및 실적 건수 조회"
+        description: "복합판매 구분코드별 환산점수와 실적 건수를 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "CURRENT_MONTH"
+          reference_date:
+            default: "NONE"
+        clear_when_present:
+          closing_year_month: "reference_date"
+      - code: "COMPOSITE_CONVERSION_EXCLUDED"
+        name: "환산 미반영 내역 조회"
+        description: "자동이체 미연결, 자동차 연계, 탈회, 삼성전자 매출 등 환산 미반영 내역 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "CURRENT_MONTH"

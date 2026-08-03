@@ -1,0 +1,10 @@
+subagents:
+  PERFORMANCE_FEE:
+    directory: "performance-fee"
+    enabled: true
+  RP:
+    directory: "rp"
+    enabled: true
+  QUALIFICATION:
+    directory: "qualification"
+    enabled: true

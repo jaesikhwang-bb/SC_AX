@@ -1,0 +1,17 @@
+version: "1.1.0"
+released_at: "2026-07-31"
+
+router:
+  system_prompt: "router/system.md"
+  agents_prompt: "router/agents.md"
+
+agent_code:
+  - "fee_policy"
+  - "performance_fee"
+  - "product_guide"
+  - "qualification"
+  - "rp"
+  - "tablet"
+
+model:
+  temperature: 0

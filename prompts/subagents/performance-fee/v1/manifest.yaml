@@ -1,0 +1,224 @@
+version: "1.0.0"
+released_at: "2026-07-30"
+agent_code: "PERFORMANCE_FEE"
+
+prompt_files:
+  - "system.md"
+  - "scenarios/01_performance_summary.md"
+  - "scenarios/02_composite_conversion.md"
+  - "scenarios/03_unregistered_member.md"
+  - "scenarios/04_disposal_fee.md"
+  - "scenarios/05_fee_details.md"
+
+model:
+  temperature: 0
+
+parameter_definitions:
+  closing_year_month:
+    description: "마감작업년월. 반드시 YYYYMM 형식이며 질문에 없으면 null"
+    pattern: "^[0-9]{6}$"
+  reference_date:
+    description: "기준일자. 반드시 YYYYMMDD 형식이며 질문에 없으면 null"
+    pattern: "^[0-9]{8}$"
+  reference_year:
+    description: "기준년도. 반드시 YYYY 형식이며 질문에 없으면 null"
+    pattern: "^[0-9]{4}$"
+
+scenarios:
+  - code: "PERFORMANCE_SUMMARY"
+    name: "실적 종합조회"
+    description: "로그인한 카드 모집인 본인의 환산점수와 실적건수를 조회"
+    details:
+      - code: "PERFORMANCE_SUMMARY_TOTAL"
+        name: "실적 종합 조회"
+        description: "로그인한 카드 모집인 본인의 환산점수와 실적건수를 종합 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "CURRENT_MONTH"
+          reference_date:
+            default: "NONE"
+        clear_when_present:
+          closing_year_month: "reference_date"
+
+  - code: "COMPOSITE_CONVERSION"
+    name: "복합환산조회"
+    description: "복합판매구분코드별 환산점수와 실적 미반영 카드 내역 조회"
+    details:
+      - code: "COMPOSITE_CONVERSION_SCORE"
+        name: "복합판매 구분코드별 환산점수 및 실적 건수 조회"
+        description: "복합판매 구분코드별 환산점수와 실적 건수를 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "CURRENT_MONTH"
+          reference_date:
+            default: "NONE"
+        clear_when_present:
+          closing_year_month: "reference_date"
+      - code: "COMPOSITE_CONVERSION_EXCLUDED"
+        name: "환산 미반영 내역 조회"
+        description: "자동이체 미연결, 자동차 연계, 탈회, 삼성전자 매출 등 실적 제외 내역 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "CURRENT_MONTH"
+
+  - code: "UNREGISTERED_MEMBER"
+    name: "미등록 회원 조회"
+    description: "미등록 회원 폐기 예정 현황과 유형별 건수 및 상세 내역 조회"
+    details:
+      - code: "UNREGISTERED_MEMBER_SUMMARY"
+        name: "미등록 회원 현황 조회"
+        description: "카드발급, 업체인계, 카드반송, 타인수령 등 유형별 건수 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "CURRENT_MONTH"
+      - code: "UNREGISTERED_MEMBER_HANDOFF_DETAIL"
+        name: "타인수령 및 업체인계 상세 조회"
+        description: "미등록 회원 유형 중 타인수령과 업체인계 상세 내역 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "CURRENT_MONTH"
+
+  - code: "DISPOSAL_FEE"
+    name: "폐기 수수료 조회"
+    description: "폐기 유형별 건수와 회입점수 및 회입수수료 조회"
+    details:
+      - code: "DISPOSAL_FEE_SUMMARY"
+        name: "폐기 환산 및 회입 수수료 조회"
+        description: "카드 모집인의 폐기 환산 건수, 회입점수, 회입수수료 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "PREVIOUS_MONTH"
+      - code: "DISPOSAL_FEE_CUSTOMER_DETAIL"
+        name: "고객별 폐기 환산 상세 조회"
+        description: "특정 고객의 폐기 환산 상세 내역과 폐기 사유 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "PREVIOUS_MONTH"
+
+  - code: "FEE_DETAILS"
+    name: "수수료 내역 조회"
+    description: "로그인한 카드 모집인 본인이 실제 지급받은 수수료, 세금, 실지급액 및 추이 조회"
+    details:
+      - code: "FEE_ITEM_DETAILS"
+        name: "항목별 수수료 조회"
+        description: "카드 모집인 본인에게 실제 지급된 수당 개념 항목별 수수료 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "PREVIOUS_MONTH"
+      - code: "FEE_TAX_NET_PAYMENT"
+        name: "세금 및 실지급액 조회"
+        description: "카드 모집인 본인의 항목별 세금·공제 내역과 최종 실지급액 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "PREVIOUS_MONTH"
+      - code: "FEE_12_MONTH_TREND"
+        name: "12개월 수수료 추이 조회"
+        description: "카드 모집인 본인이 실제 지급받은 최근 12개월 수수료 내역 추이 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          closing_year_month:
+            default: "CURRENT_MONTH"
+      - code: "WITHHOLDING_TAX"
+        name: "원천징수 내역 조회"
+        description: "카드 모집인 본인의 기준년도 원천징수 내역 조회"
+        mcp:
+          tool_name: "test_tool"
+          arguments:
+            param1:
+              source: "literal"
+              value: "data1"
+            param2:
+              source: "literal"
+              value: "data2"
+        parameter_rules:
+          reference_year:
+            default: "PREVIOUS_YEAR"

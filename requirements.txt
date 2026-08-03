@@ -1,0 +1,8 @@
+fastapi
+httpx
+langchain
+langchain-openai
+langgraph
+pyyaml
+redis
+uvicorn[standard]
