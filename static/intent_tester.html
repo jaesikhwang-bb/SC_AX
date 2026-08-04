@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>의도분류 테스트</title>
+  <title>1차 의도분류 테스트</title>
   <style>
     :root {
       color-scheme: light;
@@ -365,6 +365,22 @@
       line-height: 1.6;
     }
 
+    .stream-answer {
+      min-height: 84px;
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid #abefc6;
+      border-radius: 10px;
+      background: #f6fef9;
+      color: var(--text);
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+
+    .stream-events {
+      max-height: 260px;
+    }
+
     @media (max-width: 780px) {
       .layout {
         grid-template-columns: 1fr;
@@ -383,7 +399,7 @@
 <body>
   <main>
     <header>
-      <h1>의도분류 테스트</h1>
+      <h1>1차 의도분류 테스트 · SSE 답변 스트리밍</h1>
       <p>
         삼성카드 영업지점 AX 모집인 의도분류 테스트.
       </p>
@@ -400,12 +416,17 @@
               <input id="employee-id" value="EMP001" required>
             </div>
             <div class="field">
-              <label for="conversation-id">대화 ID</label>
+              <label for="conversation-id">Session ID</label>
               <input id="conversation-id" value="intent-test-001" required>
               <small>
                 같은 값을 유지하면 이전 질문을 이어받습니다.
               </small>
             </div>
+          </div>
+
+          <div class="field">
+            <label for="endpoint">서비스 별칭</label>
+            <input id="endpoint" value="acqsc" required>
           </div>
 
           <div class="field">
@@ -429,7 +450,7 @@
 
           <div class="actions">
             <button class="primary" id="submit-button" type="submit">
-              의도분류 실행
+              스트리밍 실행
             </button>
             <button class="secondary" id="reset-button" type="button">
               초기화
@@ -439,7 +460,7 @@
       </section>
 
       <section class="panel">
-        <h2>분류 결과</h2>
+        <h2>스트리밍 결과</h2>
         <div id="result">
           <div class="result-empty">
             왼쪽에 질문을 입력하고<br>의도분류 실행 버튼을 누르세요.
@@ -472,6 +493,7 @@
     const form = document.querySelector("#chat-form");
     const employeeInput = document.querySelector("#employee-id");
     const conversationInput = document.querySelector("#conversation-id");
+    const endpointInput = document.querySelector("#endpoint");
     const agentSelect = document.querySelector("#agent-code");
     const messageInput = document.querySelector("#message");
     const submitButton = document.querySelector("#submit-button");
@@ -485,6 +507,8 @@
 
     let waitingThreadId = null;
     let lastResponse = null;
+    let lastAction = null;
+    let streamState = null;
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -502,7 +526,153 @@
     function setLoading(isLoading, label = "처리 중...") {
       submitButton.disabled = isLoading;
       resetButton.disabled = isLoading;
-      submitButton.textContent = isLoading ? label : "의도분류 실행";
+      submitButton.textContent = isLoading ? label : "스트리밍 실행";
+    }
+
+    async function requestStream(path, body, onEvent) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "text/event-stream",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const raw = await response.text();
+        let payload;
+        try {
+          payload = JSON.parse(raw);
+        } catch {
+          payload = { message: raw || `HTTP ${response.status}` };
+        }
+        const error = new Error(`HTTP ${response.status}`);
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+      }
+      if (!response.body) {
+        throw new Error("브라우저가 스트리밍 응답 본문을 제공하지 않았습니다.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      while (true) {
+        const {value, done} = await reader.read();
+        buffer += decoder.decode(value ?? new Uint8Array(), {stream: !done});
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() ?? "";
+        for (const block of blocks) {
+          const data = block
+            .split(/\r?\n/)
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
+          if (!data) continue;
+          onEvent(JSON.parse(data));
+        }
+        if (done) break;
+      }
+      if (buffer.trim()) {
+        const data = buffer.replace(/^data:\s*/, "").trim();
+        if (data) onEvent(JSON.parse(data));
+      }
+    }
+
+    function initializeStreamState() {
+      streamState = {
+        requestId: null,
+        sessionId: conversationInput.value.trim(),
+        threadId: null,
+        answer: "",
+        status: "STREAMING",
+        duration: null,
+        sourceDocuments: [],
+        action: null,
+        processMetadata: null,
+        events: [],
+        error: null,
+      };
+      lastAction = null;
+      renderStreamState();
+    }
+
+    function handleStreamEvent(envelope) {
+      if (!streamState) initializeStreamState();
+      streamState.events.push(envelope);
+      const {event, data} = envelope;
+      if (event === "request_id") streamState.requestId = data;
+      if (event === "session_id") streamState.sessionId = data;
+      if (event === "thread_id") streamState.threadId = data;
+      if (event === "token") streamState.answer += data;
+      if (event === "sourceDocuments") streamState.sourceDocuments = data ?? [];
+      if (event === "action") {
+        streamState.action = data;
+        streamState.status = "INPUT_REQUIRED";
+        waitingThreadId = data.thread_id;
+        lastAction = data;
+      }
+      if (event === "messages") {
+        const metadata = (data ?? []).find((item) => item.metadata)?.metadata;
+        if (metadata) {
+          streamState.processMetadata = metadata;
+          streamState.status = metadata.status ?? streamState.status;
+        }
+      }
+      if (event === "duration") streamState.duration = data;
+      if (event === "end") streamState.status = data.status ?? "PASS";
+      if (event === "error") {
+        streamState.error = data;
+        streamState.status = "ERROR";
+      }
+      renderStreamState();
+    }
+
+    function renderStreamState() {
+      if (!streamState) return;
+      const statusClass = streamState.status.toLowerCase().replaceAll("_", "-");
+      const metadata = streamState.processMetadata ?? {};
+      const classification = metadata.classification ?? {};
+      const subagent = metadata.subagent;
+      const mcpResults = metadata.mcp_results ?? [];
+      let html = `
+        <span class="status ${escapeHtml(statusClass)}">${escapeHtml(streamState.status)}</span>
+        <dl>
+          <dt>Request ID</dt><dd>${escapeHtml(streamState.requestId ?? "수신 중")}</dd>
+          <dt>Session ID</dt><dd>${escapeHtml(streamState.sessionId)}</dd>
+          <dt>Thread ID</dt><dd>${escapeHtml(streamState.threadId ?? "수신 중")}</dd>
+          <dt>분류 에이전트</dt><dd>${escapeHtml(classification.agent_code ?? "-")}</dd>
+          <dt>보정 질문</dt><dd>${escapeHtml(classification.refined_query ?? "-")}</dd>
+          <dt>소요 시간</dt><dd>${escapeHtml(streamState.duration?.formatted ?? "처리 중")}</dd>
+        </dl>
+        <div class="stream-answer">${escapeHtml(streamState.answer || "답변 token 수신 대기 중...")}</div>
+      `;
+
+      if (subagent) {
+        html += `<div class="subagent"><strong>서브에이전트 결과</strong><pre>${formatJson(subagent)}</pre></div>`;
+      }
+      if (mcpResults.length) {
+        html += `<div class="mcp-result"><strong>MCP 호출 결과 (${mcpResults.length}개)</strong><pre>${formatJson(mcpResults)}</pre></div>`;
+      }
+      if (streamState.sourceDocuments.length) {
+        html += `<details open><summary>RAG 출처 문서 (${streamState.sourceDocuments.length}개)</summary><pre>${formatJson(streamState.sourceDocuments)}</pre></details>`;
+      }
+      if (streamState.action) {
+        html += `
+          <div class="hitl">
+            <strong>${escapeHtml(streamState.action.type)}</strong>
+            <p>${escapeHtml(streamState.action.message)}</p>
+            <pre>${formatJson(streamState.action.inputs)}</pre>
+            <div class="actions"><button class="approve" id="approve-button" type="button">OK 입력 전송</button></div>
+          </div>`;
+      }
+      if (streamState.error) {
+        html += `<p class="error-message">${escapeHtml(streamState.error.message)}</p>`;
+      }
+      html += `<details><summary>수신한 SSE 이벤트 전체 보기</summary><pre class="stream-events">${formatJson(streamState.events)}</pre></details>`;
+      resultBox.innerHTML = html;
+      document.querySelector("#approve-button")?.addEventListener("click", approveHitl);
     }
 
     async function requestJson(path, body, method) {
@@ -530,7 +700,10 @@
 
     async function loadMetadata() {
       try {
-        const metadata = await requestJson("/v1/metadata");
+        // 앞의 슬래시를 사용하지 않아 로컬에서는 /v1/metadata로,
+        // GenOS 코드 서빙에서는 /api/gateway/code_serving/{id}/v1/metadata로
+        // 현재 gateway prefix를 유지한 채 요청한다.
+        const metadata = await requestJson("v1/metadata");
         agentSelect.innerHTML = [
           '<option value="">선택하지 않음 (LLM 분류로 바로 진행)</option>',
           ...metadata.agent_codes.map(
@@ -561,7 +734,7 @@
       conversationList.innerHTML =
         '<div class="result-empty">대화 목록을 불러오는 중입니다.</div>';
       try {
-        const data = await requestJson("/v1/tester/conversations");
+        const data = await requestJson("v1/tester/conversations");
         conversationSummary.textContent =
           `${data.project_code} 프로젝트 · ${data.backend} 저장소 · ` +
           `${data.count}개 대화`;
@@ -627,7 +800,7 @@
       });
       try {
         const result = await requestJson(
-          `/v1/tester/conversations?${parameters.toString()}`,
+          `v1/tester/conversations?${parameters.toString()}`,
           undefined,
           "DELETE",
         );
@@ -658,6 +831,12 @@
       const classification = data.classification ?? {};
       const subagent = data.subagent;
       const mcp = data.mcp;
+      const scenarioMatches = subagent?.matches?.length
+        ? subagent.matches
+        : (subagent ? [subagent] : []);
+      const mcpResults = data.mcp_results?.length
+        ? data.mcp_results
+        : (mcp ? [mcp] : []);
       const statusClass = String(data.status)
         .toLowerCase()
         .replaceAll("_", "-");
@@ -682,60 +861,64 @@
       `;
 
       if (subagent) {
-        const parameterRows = Object.entries(subagent.parameters ?? {})
-          .map(
-            ([name, value]) => `
-              <dt>${escapeHtml(name)}</dt>
-              <dd>${escapeHtml(value ?? "null")}</dd>
-            `,
-          )
-          .join("");
+        const matchCards = scenarioMatches.map((match, index) => {
+          const parameterRows = Object.entries(match.parameters ?? {})
+            .map(
+              ([name, value]) => `
+                <dt>${escapeHtml(name)}</dt>
+                <dd>${escapeHtml(value ?? "null")}</dd>
+              `,
+            )
+            .join("");
+          return `
+            <div style="margin-top: ${index ? "16px" : "0"}">
+              <strong>매칭 ${index + 1}</strong>
+              <dl>
+                <dt>시나리오</dt>
+                <dd>${escapeHtml(match.scenario_name)} (${escapeHtml(match.scenario_code)})</dd>
+                <dt>세부 시나리오</dt>
+                <dd>${escapeHtml(match.detail_scenario_name)} (${escapeHtml(match.detail_scenario_code)})</dd>
+                ${parameterRows}
+              </dl>
+            </div>
+          `;
+        }).join("");
         html += `
           <div class="subagent">
-            <strong>${escapeHtml(subagent.agent_code)} 서브에이전트 결과</strong>
+            <strong>${escapeHtml(subagent.agent_code)} 서브에이전트 결과 (${scenarioMatches.length}개)</strong>
             <dl>
-              <dt>시나리오</dt>
-              <dd>
-                ${escapeHtml(subagent.scenario_name)}
-                (${escapeHtml(subagent.scenario_code)})
-              </dd>
-              <dt>세부 시나리오</dt>
-              <dd>
-                ${escapeHtml(subagent.detail_scenario_name)}
-                (${escapeHtml(subagent.detail_scenario_code)})
-              </dd>
               <dt>프롬프트 버전</dt>
               <dd>${escapeHtml(subagent.prompt_version)}</dd>
-              ${parameterRows}
             </dl>
+            ${matchCards}
           </div>
         `;
       }
 
-      if (mcp) {
-        html += `
-          <div class="mcp-result">
-            <strong>MCP 도구 호출 결과</strong>
+      if (mcpResults.length) {
+        const mcpCards = mcpResults.map((item, index) => `
+          <div style="margin-top: ${index ? "16px" : "0"}">
+            <strong>MCP ${index + 1}</strong>
             <dl>
               <dt>사용 도구</dt>
-              <dd>${escapeHtml(mcp.tool_name)}</dd>
+              <dd>${escapeHtml(item.tool_name)}</dd>
               <dt>추적 ID</dt>
-              <dd>${escapeHtml(mcp.request_id)}</dd>
+              <dd>${escapeHtml(item.request_id)}</dd>
               <dt>백엔드</dt>
-              <dd>${escapeHtml(mcp.backend)}</dd>
+              <dd>${escapeHtml(item.backend)}</dd>
               <dt>성공 여부</dt>
-              <dd>${escapeHtml(mcp.succeeded)}</dd>
+              <dd>${escapeHtml(item.succeeded)}</dd>
             </dl>
             <details>
               <summary>MCP Payload와 structuredContent 원본 보기</summary>
-              <pre>${formatJson({
-                tool_name: mcp.tool_name,
-                request_id: mcp.request_id,
-                arguments: mcp.arguments,
-                result: mcp.result,
-                error: mcp.error,
-              })}</pre>
+              <pre>${formatJson(item)}</pre>
             </details>
+          </div>
+        `).join("");
+        html += `
+          <div class="mcp-result">
+            <strong>MCP 도구 호출 결과 (${mcpResults.length}개)</strong>
+            ${mcpCards}
           </div>
         `;
       }
@@ -821,7 +1004,7 @@
 
       try {
         const history = await requestJson(
-          `/v1/tester/history?${parameters.toString()}`,
+          `v1/tester/history?${parameters.toString()}`,
         );
         if (!history.messages.length) {
           historyContent.innerHTML = `
@@ -872,23 +1055,25 @@
     async function submitQuestion(event) {
       event.preventDefault();
       waitingThreadId = null;
-      setLoading(true, "LLM 분류 중...");
-      resultBox.innerHTML = '<div class="result-empty">의도분류 처리 중...</div>';
+      lastAction = null;
+      setLoading(true, "스트리밍 수신 중...");
+      initializeStreamState();
 
       const request = {
         message: messageInput.value.trim(),
         employee_id: employeeInput.value.trim(),
-        conversation_id: conversationInput.value.trim(),
+        session_id: conversationInput.value.trim(),
+        endpoint: endpointInput.value.trim(),
+        humanInput: [],
       };
-      // 선택하지 않은 경우 필드 자체를 보내지 않는다. API는 null과 빈 문자열도
-      // 같은 의미로 처리하지만, 목업에서는 가장 명확한 생략 형태를 사용한다.
+      // 에이전트를 선택하지 않으면 agent_code를 생략하고 마스터 분류 결과로
+      // 바로 진행한다.
       if (agentSelect.value) {
-        request.frontend_agent_code = agentSelect.value;
+        request.agent_code = agentSelect.value;
       }
 
       try {
-        const data = await requestJson("/v1/chat", request);
-        renderResult(data);
+        await requestStream("v1/chat/stream", request, handleStreamEvent);
         await loadConversationList();
       } catch (error) {
         renderError(error);
@@ -898,7 +1083,7 @@
     }
 
     async function approveHitl() {
-      if (!waitingThreadId) {
+      if (!waitingThreadId || !lastAction) {
         return;
       }
 
@@ -907,11 +1092,16 @@
       approveButton.textContent = "승인 처리 중...";
 
       try {
-        const data = await requestJson("/v1/chat", {
-          thread_id: waitingThreadId,
-          hitl_input: { signal: "OK" },
-        });
-        renderResult(data);
+        const resumeThreadId = waitingThreadId;
+        const inputCode = lastAction?.inputs?.[0]?.code ?? "signal";
+        initializeStreamState();
+        await requestStream("v1/chat/stream", {
+          session_id: conversationInput.value.trim(),
+          thread_id: resumeThreadId,
+          endpoint: endpointInput.value.trim(),
+          employee_id: employeeInput.value.trim(),
+          humanInput: [{code: inputCode, input: "OK"}],
+        }, handleStreamEvent);
         await loadConversationList();
       } catch (error) {
         renderError(error);

@@ -48,6 +48,16 @@ class RecordingHistoryStore(EmptyChatHistoryStore):
         self.loaded_agent_code = agent_code
         return [{"role": "user", "content": "이전 RP 질문"}]
 
+    async def get_recent_for_conversation(
+        self,
+        employee_id,
+        conversation_id,
+        limit,
+    ):
+        self.loaded_employee_id = employee_id
+        self.loaded_agent_code = "RP"
+        return "RP", [{"role": "user", "content": "이전 RP 질문"}]
+
     async def append_message(self, **kwargs):
         self.saved.append(kwargs)
         return True
@@ -143,8 +153,8 @@ class MasterIntentGraphTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("RP", history_store.saved[0]["agent_code"])
         self.assertEqual("보정된 질문", history_store.saved[0]["content"])
 
-    async def test_missing_frontend_code_passes_without_comparison(self) -> None:
-        """프론트 미선택 요청은 HITL 없이 분류 코드로 바로 진행해야 한다."""
+    async def test_missing_frontend_code_uses_latest_agent_history(self) -> None:
+        """프론트 미선택도 최근 에이전트 문맥을 사용하고 HITL은 생략한다."""
 
         classifier = FakeClassifier(agent_result("RP"))
         history_store = RecordingHistoryStore()
@@ -166,10 +176,12 @@ class MasterIntentGraphTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("PASS", result.status)
         self.assertEqual("RP", result.classification.agent_code)
         self.assertIsNone(result.interrupt)
-        # 분류 전에는 agent_code가 확정되지 않았으므로 다른 에이전트 이력을
-        # 섞어 읽지 않고 빈 이력을 사용한다.
-        self.assertEqual([], classifier.received_history)
-        self.assertIsNone(history_store.loaded_agent_code)
+        # conversation에서 가장 최근인 에이전트 하나의 이력만 전달한다.
+        self.assertEqual(
+            [{"role": "user", "content": "이전 RP 질문"}],
+            classifier.received_history,
+        )
+        self.assertEqual("RP", history_store.loaded_agent_code)
         # 저장할 때는 마스터가 확정한 agent_code를 사용한다.
         self.assertEqual("RP", history_store.saved[0]["agent_code"])
         self.assertEqual("보정된 질문", history_store.saved[0]["content"])

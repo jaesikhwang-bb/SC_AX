@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from app.config import Settings
 from app.observability import async_timed_block, logger, timed
-from app.subagents.models import SubagentResult
+from app.subagents.models import SubagentResult, SubagentScenarioMatch
 from app.subagents.prompt_loader import (
     ScenarioPromptBundle,
     SubagentPromptLoader,
@@ -81,7 +81,11 @@ class ScenarioSubagent:
                 (
                     "human",
                     "오늘 날짜: {today}\n\n"
-                    "마스터 에이전트가 보정한 사용자 질문:\n{query}",
+                    "마스터 에이전트가 보정한 사용자 질문:\n{query}\n\n"
+                    "질문에 서로 독립적인 요청이 여러 개 있으면 이 서브에이전트 "
+                    "안에서 해당하는 모든 세부 시나리오를 matches 배열에 "
+                    "한 번씩 선택하세요. 단일 요청이면 matches에는 한 개만 "
+                    "반환하세요. 다른 서브에이전트의 시나리오는 선택하지 마세요.",
                 ),
             ]
         )
@@ -131,44 +135,104 @@ class ScenarioSubagent:
                 }
             )
 
-        selected_scenario_code = structured.scenario_code.value
-        detail_code = structured.detail_scenario_code.value
-        scenario, detail = self._detail_by_code[detail_code]
-        # 세부 시나리오는 manifest에서 단 하나의 최상위 시나리오에만 속한다.
-        # LLM이 두 코드를 어긋나게 반환하더라도 500 오류를 내지 않고 더 구체적인
-        # 세부 시나리오를 기준으로 부모 시나리오를 확정한다.
-        scenario_code = str(scenario["code"])
-        if selected_scenario_code != scenario_code:
-            logger.info(
-                "======== 서브에이전트 시나리오 조합 자동 보정 | "
-                "LLM최상위=%s | 세부시나리오=%s | 적용최상위=%s",
-                selected_scenario_code,
-                detail_code,
-                scenario_code,
+        matches: list[SubagentScenarioMatch] = []
+        seen_detail_codes: set[str] = set()
+        for selected in structured.matches:
+            selected_scenario_code = selected.scenario_code.value
+            detail_code = selected.detail_scenario_code.value
+            if detail_code in seen_detail_codes:
+                logger.info(
+                    "======== 서브에이전트 중복 세부시나리오 제거 | 코드=%s",
+                    detail_code,
+                )
+                continue
+            seen_detail_codes.add(detail_code)
+            scenario, detail = self._detail_by_code[detail_code]
+            # LLM의 최상위 코드가 어긋나면 더 구체적인 세부 시나리오의 실제
+            # 부모로 자동 보정한다.
+            scenario_code = str(scenario["code"])
+            if selected_scenario_code != scenario_code:
+                logger.info(
+                    "======== 서브에이전트 시나리오 조합 자동 보정 | "
+                    "LLM최상위=%s | 세부시나리오=%s | 적용최상위=%s",
+                    selected_scenario_code,
+                    detail_code,
+                    scenario_code,
+                )
+            matches.append(
+                SubagentScenarioMatch(
+                    scenario_code=scenario_code,
+                    scenario_name=str(scenario["name"]),
+                    detail_scenario_code=detail_code,
+                    detail_scenario_name=str(detail["name"]),
+                    parameters=_normalize_parameters(
+                        raw=selected.parameters.model_dump(),
+                        manifest=self._bundle.manifest,
+                        detail=detail,
+                        today=reference_date,
+                    ),
+                )
             )
 
-        parameters = _normalize_parameters(
-            raw=structured.parameters.model_dump(),
-            manifest=self._bundle.manifest,
-            detail=detail,
-            today=reference_date,
-        )
+        # manifest가 특정 복합 표현에 필수 세부 시나리오 조합을 선언하면
+        # LLM이 일부를 누락했더라도 공통 로직으로 보완한다. 업무 용어나 코드는
+        # Python에 하드코딩하지 않아 다른 서브에이전트도 같은 기능을 쓸 수 있다.
+        normalized_query = query.casefold()
+        for rule in self._bundle.manifest.get("required_match_rules", []):
+            terms = [str(term).casefold() for term in rule.get("all_terms", [])]
+            if not terms or not all(term in normalized_query for term in terms):
+                continue
+            logger.info(
+                "======== 서브에이전트 필수 다중 매칭 규칙 적용 | "
+                "에이전트=%s | 규칙=%s",
+                self._bundle.agent_code,
+                rule.get("name", "이름없음"),
+            )
+            for required_detail_code in rule.get("detail_codes", []):
+                detail_code = str(required_detail_code)
+                if detail_code in seen_detail_codes:
+                    continue
+                scenario, detail = self._detail_by_code[detail_code]
+                seen_detail_codes.add(detail_code)
+                matches.append(
+                    SubagentScenarioMatch(
+                        scenario_code=str(scenario["code"]),
+                        scenario_name=str(scenario["name"]),
+                        detail_scenario_code=detail_code,
+                        detail_scenario_name=str(detail["name"]),
+                        parameters=_normalize_parameters(
+                            raw={
+                                str(name): None
+                                for name in self._bundle.manifest[
+                                    "parameter_definitions"
+                                ]
+                            },
+                            manifest=self._bundle.manifest,
+                            detail=detail,
+                            today=reference_date,
+                        ),
+                    )
+                )
+
+        if not matches:
+            raise ValueError("서브에이전트는 하나 이상의 시나리오를 선택해야 합니다.")
+        primary = matches[0]
         result = SubagentResult(
             agent_code=self._bundle.agent_code,
             prompt_version=self._bundle.version,
-            scenario_code=scenario_code,
-            scenario_name=str(scenario["name"]),
-            detail_scenario_code=detail_code,
-            detail_scenario_name=str(detail["name"]),
-            parameters=parameters,
+            scenario_code=primary.scenario_code,
+            scenario_name=primary.scenario_name,
+            detail_scenario_code=primary.detail_scenario_code,
+            detail_scenario_name=primary.detail_scenario_name,
+            parameters=primary.parameters,
+            matches=matches,
         )
         logger.info(
             "======== 서브에이전트 분류 완료 | 에이전트=%s | "
-            "시나리오=%s | 세부시나리오=%s | 파라미터=%s",
+            "매칭개수=%d | 세부시나리오=%s",
             result.agent_code,
-            result.scenario_code,
-            result.detail_scenario_code,
-            result.parameters,
+            len(result.matches),
+            [match.detail_scenario_code for match in result.matches],
         )
         return result
 
@@ -263,8 +327,8 @@ def _create_output_model(
         __config__=ConfigDict(extra="forbid"),
         **parameter_fields,
     )
-    return create_model(
-        f"{bundle.agent_code}ScenarioOutput",
+    match_model = create_model(
+        f"{bundle.agent_code}ScenarioMatchOutput",
         __config__=ConfigDict(extra="forbid"),
         scenario_code=(
             scenario_enum,
@@ -277,6 +341,22 @@ def _create_output_model(
         parameters=(
             parameters_model,
             Field(description="질문에서 명시적으로 추출한 조회 파라미터"),
+        ),
+    )
+    return create_model(
+        f"{bundle.agent_code}ScenarioOutput",
+        __config__=ConfigDict(extra="forbid"),
+        matches=(
+            list[match_model],
+            Field(
+                min_length=1,
+                max_length=len(detail_codes),
+                description=(
+                    "질문에 포함된 독립 요청과 일치하는 모든 시나리오. "
+                    "현재 선택된 서브에이전트의 코드만 사용하고 동일 세부 "
+                    "시나리오는 한 번만 반환"
+                ),
+            ),
         ),
     )
 

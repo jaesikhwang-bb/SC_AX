@@ -45,7 +45,13 @@ class GenOSIntentClassifier:
                 (
                     "human",
                     "프론트에서 선택한 에이전트:\n{frontend_agent_code}\n\n"
-                    "이전 대화:\n{history}\n\n현재 사용자 질문:\n{message}",
+                    "이전 대화:\n{history}\n\n"
+                    "[이력 사용 지시]\n"
+                    "현재 질문을 먼저 독립적으로 해석하세요. 현재 질문만으로 "
+                    "대상과 요청이 명확하면 이전 대화의 주제를 추가하지 마세요. "
+                    "현재 질문에 생략된 참조가 있을 때만 직접 관련된 이력을 "
+                    "사용하세요.\n\n"
+                    "현재 사용자 질문:\n{message}",
                 ),
             ]
         )

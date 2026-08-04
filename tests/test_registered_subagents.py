@@ -31,7 +31,6 @@ class RegisteredSubagentPromptTest(unittest.TestCase):
             {
                 "RP_DOCUMENT_SEARCH",
                 "APARTMENT_RP_LIST",
-                "PERFORMANCE_SUMMARY_TOTAL",
                 "COMPOSITE_CONVERSION_SCORE",
                 "COMPOSITE_CONVERSION_EXCLUDED",
             },
@@ -43,19 +42,21 @@ class RegisteredSubagentPromptTest(unittest.TestCase):
         output_model = _create_output_model(bundle)
         structured = output_model.model_validate(
             {
-                "scenario_code": "APARTMENT_MANAGEMENT_FEE_RP_ELIGIBILITY",
-                "detail_scenario_code": "APARTMENT_RP_LIST",
-                "parameters": {
-                    "address": "잠실동",
-                    "closing_year_month": None,
-                    "reference_date": None,
-                },
+                "matches": [{
+                    "scenario_code": "APARTMENT_MANAGEMENT_FEE_RP_ELIGIBILITY",
+                    "detail_scenario_code": "APARTMENT_RP_LIST",
+                    "parameters": {
+                        "address": "잠실동",
+                        "closing_year_month": None,
+                        "reference_date": None,
+                    },
+                }],
             }
         )
-        self.assertEqual("잠실동", structured.parameters.address)
+        self.assertEqual("잠실동", structured.matches[0].parameters.address)
 
         normalized = _normalize_parameters(
-            raw=structured.parameters.model_dump(),
+            raw=structured.matches[0].parameters.model_dump(),
             manifest=bundle.manifest,
             detail=details["APARTMENT_RP_LIST"],
             today=date(2026, 7, 31),
@@ -90,6 +91,7 @@ class RegisteredSubagentPromptTest(unittest.TestCase):
         bundle = self.bundles["RP"]
         self.assertIn("COMPOSITE_CONVERSION_SCORE", bundle.system_prompt)
         self.assertIn("COMPOSITE_CONVERSION_EXCLUDED", bundle.system_prompt)
+        self.assertNotIn("PERFORMANCE_SUMMARY_TOTAL", bundle.system_prompt)
         self.assertNotIn("FEE_ITEM_DETAILS", bundle.system_prompt)
         self.assertNotIn("FEE_TAX_NET_PAYMENT", bundle.system_prompt)
         self.assertNotIn("FEE_12_MONTH_TREND", bundle.system_prompt)
@@ -116,16 +118,18 @@ class RegisteredSubagentPromptTest(unittest.TestCase):
         output_model = _create_output_model(bundle)
         structured = output_model.model_validate(
             {
-                "scenario_code": "PERSONAL_MEMBER_QUALIFICATION",
-                "detail_scenario_code": "FOREIGNER_QUALIFICATION",
-                "parameters": {
-                    "member_category": "FOREIGNER",
-                    "restricted_request_type": None,
-                },
+                "matches": [{
+                    "scenario_code": "PERSONAL_MEMBER_QUALIFICATION",
+                    "detail_scenario_code": "FOREIGNER_QUALIFICATION",
+                    "parameters": {
+                        "member_category": "FOREIGNER",
+                        "restricted_request_type": None,
+                    },
+                }],
             }
         )
         normalized = _normalize_parameters(
-            raw=structured.parameters.model_dump(),
+            raw=structured.matches[0].parameters.model_dump(),
             manifest=bundle.manifest,
             detail=details["FOREIGNER_QUALIFICATION"],
             today=date(2026, 7, 31),
@@ -154,12 +158,14 @@ class RegisteredSubagentPromptTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             output_model.model_validate(
                 {
-                    "scenario_code": "PERSONAL_MEMBER_QUALIFICATION",
-                    "detail_scenario_code": "NEW_MEMBER_QUALIFICATION",
-                    "parameters": {
-                        "member_category": "임의값",
-                        "restricted_request_type": None,
-                    },
+                    "matches": [{
+                        "scenario_code": "PERSONAL_MEMBER_QUALIFICATION",
+                        "detail_scenario_code": "NEW_MEMBER_QUALIFICATION",
+                        "parameters": {
+                            "member_category": "임의값",
+                            "restricted_request_type": None,
+                        },
+                    }],
                 }
             )
 
@@ -170,7 +176,7 @@ class RegisteredSubagentPromptTest(unittest.TestCase):
             for scenario in bundle.manifest["scenarios"]
             for detail in scenario["details"]
         ]
-        self.assertEqual(22, len(details))
+        self.assertEqual(21, len(details))
         for detail in details:
             with self.subTest(detail=detail["code"]):
                 self.assertEqual("test_tool", detail["mcp"]["tool_name"])

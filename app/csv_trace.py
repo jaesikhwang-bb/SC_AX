@@ -179,6 +179,18 @@ def _build_row(
     classification = _mapping(state.get("classification"))
     subagent = _mapping(state.get("subagent"))
     mcp = _mapping(state.get("mcp"))
+    scenario_matches = [
+        _mapping(item) for item in subagent.get("matches", [])
+        if isinstance(item, Mapping)
+    ]
+    if not scenario_matches and subagent:
+        scenario_matches = [subagent]
+    mcp_results = [
+        _mapping(item) for item in state.get("mcp_results", [])
+        if isinstance(item, Mapping)
+    ]
+    if not mcp_results and mcp:
+        mcp_results = [mcp]
     interrupt = _mapping(state.get("interrupt"))
     values: dict[str, Any] = {
         "최초요청일시": datetime.now().astimezone().isoformat(
@@ -201,16 +213,38 @@ def _build_row(
         "마스터분류유형": classification.get("classification_type"),
         "마스터에이전트코드": classification.get("agent_code"),
         "서브에이전트코드": subagent.get("agent_code"),
-        "시나리오코드": subagent.get("scenario_code"),
-        "시나리오명": subagent.get("scenario_name"),
-        "세부시나리오코드": subagent.get("detail_scenario_code"),
-        "세부시나리오명": subagent.get("detail_scenario_name"),
-        "추출파라미터_JSON": _json_text(subagent.get("parameters")),
-        "MCP도구명": mcp.get("tool_name"),
-        "MCP추적ID": mcp.get("request_id"),
-        "MCP요청파라미터_JSON": _json_text(mcp.get("arguments")),
-        "MCP성공여부": mcp.get("succeeded"),
-        "MCP결과_JSON": _json_text(mcp.get("result")),
+        "시나리오코드": " | ".join(
+            str(item.get("scenario_code", "")) for item in scenario_matches
+        ),
+        "시나리오명": " | ".join(
+            str(item.get("scenario_name", "")) for item in scenario_matches
+        ),
+        "세부시나리오코드": " | ".join(
+            str(item.get("detail_scenario_code", ""))
+            for item in scenario_matches
+        ),
+        "세부시나리오명": " | ".join(
+            str(item.get("detail_scenario_name", ""))
+            for item in scenario_matches
+        ),
+        "추출파라미터_JSON": _json_text(
+            [item.get("parameters") for item in scenario_matches]
+        ),
+        "MCP도구명": " | ".join(
+            str(item.get("tool_name", "")) for item in mcp_results
+        ),
+        "MCP추적ID": " | ".join(
+            str(item.get("request_id", "")) for item in mcp_results
+        ),
+        "MCP요청파라미터_JSON": _json_text(
+            [item.get("arguments") for item in mcp_results]
+        ),
+        "MCP성공여부": " | ".join(
+            str(item.get("succeeded", "")) for item in mcp_results
+        ),
+        "MCP결과_JSON": _json_text(
+            [item.get("result") for item in mcp_results]
+        ),
         "처리상태": state.get("status"),
         "HITL유형": state.get("hitl_type") or interrupt.get("type"),
         "마스터분류소요시간_초": (

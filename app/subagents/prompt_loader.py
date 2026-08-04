@@ -190,3 +190,20 @@ class SubagentPromptLoader:
                                 f"{detail_code}.{argument_name}가 알 수 없는 "
                                 f"파라미터를 참조합니다: {parameter_name}"
                             )
+
+        # 복합 질문 보완 규칙이 존재하면 현재 서브에이전트에 실제 등록된 세부
+        # 시나리오만 참조하는지 시작 시점에 검증한다.
+        for rule in manifest.get("required_match_rules", []):
+            terms = rule.get("all_terms", [])
+            if not isinstance(terms, list) or not terms:
+                raise ValueError(
+                    "required_match_rules.all_terms는 비어 있지 않은 배열이어야 합니다."
+                )
+            unknown_details = {
+                str(code) for code in rule.get("detail_codes", [])
+            } - detail_codes
+            if unknown_details:
+                raise ValueError(
+                    "required_match_rules에 알 수 없는 세부 시나리오가 있습니다: "
+                    f"{sorted(unknown_details)}"
+                )

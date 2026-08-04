@@ -13,6 +13,10 @@ class FailingRedisClient:
     async def lrange(self, *args):
         raise ConnectionError("테스트용 Redis 연결 실패")
 
+    async def scan_iter(self, *args, **kwargs):
+        raise ConnectionError("테스트용 Redis 연결 실패")
+        yield  # pragma: no cover - 비동기 제너레이터 형태를 위한 도달 불가 코드
+
     async def eval(self, *args):
         raise ConnectionError("테스트용 Redis 연결 실패")
 
@@ -48,6 +52,15 @@ class RedisFallbackTest(unittest.IsolatedAsyncioTestCase):
             "RP",
             limit=10,
         )
+        self.assertEqual([], history)
+
+    async def test_recent_agent_read_failure_returns_empty_history(self) -> None:
+        agent_code, history = await self.store.get_recent_for_conversation(
+            "EMP001",
+            "conversation-1",
+            limit=10,
+        )
+        self.assertIsNone(agent_code)
         self.assertEqual([], history)
 
     async def test_write_failure_returns_false(self) -> None:

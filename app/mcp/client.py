@@ -135,6 +135,7 @@ class ManifestMcpToolExecutor:
             employee_id=employee_id,
             conversation_id=conversation_id,
             thread_id=thread_id,
+            detail_scenario_code=subagent.detail_scenario_code,
         )
         tool_name = str(spec["tool_name"])
         payload = {
@@ -279,10 +280,13 @@ def build_mcp_request_id(
     employee_id: str,
     conversation_id: str,
     thread_id: str,
+    detail_scenario_code: str | None = None,
 ) -> str:
     """사원·대화·단일 실행을 사람이 역추적할 수 있는 JSON-RPC id를 만든다."""
 
     raw = f"{project_code}:{employee_id}:{conversation_id}:{thread_id}"
+    if detail_scenario_code:
+        raw = f"{raw}:{detail_scenario_code}"
     normalized = re.sub(r"[^A-Za-z0-9_.:-]", "_", raw)
     if len(normalized) <= 240:
         return normalized

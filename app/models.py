@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     JsonValue,
     field_validator,
@@ -124,6 +125,85 @@ class ChatRequest(BaseModel):
         return self.thread_id is not None
 
 
+class HumanInputItem(BaseModel):
+    """프론트 입력창 한 개에서 전달되는 코드와 사용자 입력값."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=200)
+    input: JsonValue
+
+
+class StreamingChatRequest(BaseModel):
+    """신규 프론트 규격을 사용하는 SSE 채팅 요청.
+
+    thread_id가 없으면 신규 질문이고, 있으면 Redis에 저장된 HITL 상태에 대한
+    후속 입력이다. session_id는 기존 conversation_id와 같은 멀티턴 범위다.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    message: str | None = Field(default=None, min_length=1, max_length=10_000)
+    session_id: str = Field(min_length=1, max_length=200)
+    thread_id: str | None = Field(default=None, min_length=1, max_length=200)
+    endpoint: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    agent_code: str | None = Field(default=None, max_length=100)
+    employee_id: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    human_input: list[HumanInputItem] = Field(
+        default_factory=list,
+        alias="humanInput",
+    )
+
+    @field_validator("agent_code", mode="before")
+    @classmethod
+    def normalize_optional_agent_code(cls, value):
+        """에이전트 미선택을 나타내는 빈 문자열을 None으로 통일한다."""
+
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def validate_stream_request_mode(self) -> "StreamingChatRequest":
+        """신규 질문과 HITL 입력을 thread_id 존재 여부로 구분한다."""
+
+        if self.thread_id is None:
+            if self.message is None:
+                raise ValueError("신규 질문에는 message가 필요합니다.")
+            if self.human_input:
+                raise ValueError("신규 질문에는 humanInput을 사용할 수 없습니다.")
+            return self
+
+        if self.message is not None:
+            raise ValueError("HITL 재진입 요청에는 message를 보낼 수 없습니다.")
+        if not self.human_input:
+            raise ValueError("thread_id가 있으면 humanInput이 한 건 이상 필요합니다.")
+        codes = [item.code for item in self.human_input]
+        if len(codes) != len(set(codes)):
+            raise ValueError("humanInput의 code는 요청 안에서 중복될 수 없습니다.")
+        return self
+
+    @property
+    def is_hitl_continuation(self) -> bool:
+        return self.thread_id is not None
+
+    def to_hitl_value(self) -> dict[str, JsonValue]:
+        """humanInput 배열을 기존 HITL 검증기가 사용하는 코드-값 객체로 바꾼다."""
+
+        return {item.code: item.input for item in self.human_input}
+
+
 class ChatResponse(BaseModel):
     """마스터 분류와 등록된 시나리오 서브에이전트의 결과."""
 
@@ -134,6 +214,8 @@ class ChatResponse(BaseModel):
     subagent: SubagentResult | None = None
     # 세부 시나리오 manifest에 등록된 MCP 도구와 추적 ID, 조회 결과이다.
     mcp: McpExecutionResult | None = None
+    # 다중 시나리오 각각의 MCP 결과. 기존 mcp는 첫 번째 결과를 유지한다.
+    mcp_results: list[McpExecutionResult] = Field(default_factory=list)
     # 기존 프론트 계약과의 호환성을 위해 필드명은 interrupt를 유지한다.
     # 실제 구현은 LangGraph interrupt()가 아니며, 에이전트 승인·MCP 파라미터
     # 입력·잘못된 값 재입력 등을 표현하는 Redis 기반 공통 입력 요청이다.

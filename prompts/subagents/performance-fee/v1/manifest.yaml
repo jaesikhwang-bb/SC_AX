@@ -1,4 +1,4 @@
-version: "1.0.0"
+version: "1.1.0"
 released_at: "2026-07-30"
 agent_code: "PERFORMANCE_FEE"
 
@@ -12,6 +12,17 @@ prompt_files:
 
 model:
   temperature: 0
+
+# LLM이 복합 질문에서 일부 match를 누락해도 선언된 업무 조합을 보장한다.
+# Python 코드에는 업무 키워드나 시나리오 코드를 하드코딩하지 않는다.
+required_match_rules:
+  - name: "실적과 일반 수수료 동시 조회"
+    all_terms:
+      - "실적"
+      - "수수료"
+    detail_codes:
+      - "PERFORMANCE_SUMMARY_TOTAL"
+      - "FEE_ITEM_DETAILS"
 
 parameter_definitions:
   closing_year_month:

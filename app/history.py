@@ -36,6 +36,13 @@ class ChatHistoryStore(Protocol):
         limit: int,
     ) -> list[dict[str, str]]: ...
 
+    async def get_recent_for_conversation(
+        self,
+        employee_id: str,
+        conversation_id: str,
+        limit: int,
+    ) -> tuple[str | None, list[dict[str, str]]]: ...
+
     async def append_message(
         self,
         *,
@@ -70,6 +77,15 @@ class EmptyChatHistoryStore:
         limit: int,
     ) -> list[dict[str, str]]:
         return []
+
+    @timed("테스트용 최근 에이전트 이력 조회")
+    async def get_recent_for_conversation(
+        self,
+        employee_id: str,
+        conversation_id: str,
+        limit: int,
+    ) -> tuple[str | None, list[dict[str, str]]]:
+        return None, []
 
     @timed("테스트용 빈 이력 저장")
     async def append_message(
@@ -162,6 +178,56 @@ class InMemoryChatHistoryStore:
             history,
         )
         return history
+
+    @timed("메모리 conversation 최근 에이전트 이력 조회")
+    async def get_recent_for_conversation(
+        self,
+        employee_id: str,
+        conversation_id: str,
+        limit: int,
+    ) -> tuple[str | None, list[dict[str, str]]]:
+        """프론트 미선택 시 가장 최근 에이전트 한 범위의 이력만 반환한다.
+
+        conversation 안의 모든 에이전트 메시지를 섞지 않는다. 마지막 메시지의
+        생성 시각이 가장 최신인 agent_code를 먼저 고른 뒤 해당 범위만 읽는다.
+        """
+
+        async with self._lock:
+            candidates = [
+                (key[3], entries)
+                for key, entries in self._messages.items()
+                if key[1] == employee_id
+                and key[2] == conversation_id
+                and entries
+            ]
+            if not candidates:
+                logger.info(
+                    "======== 메모리 최근 에이전트 이력 없음 | "
+                    "사원번호=%s | conversation_id=%s",
+                    employee_id,
+                    conversation_id,
+                )
+                return None, []
+
+            agent_code, entries = max(
+                candidates,
+                key=lambda item: item[1][-1].created_at,
+            )
+            selected_entries = list(entries)[-limit:]
+
+        history = [
+            {"role": entry.role, "content": entry.content}
+            for entry in selected_entries
+        ]
+        logger.info(
+            "======== 메모리 최근 에이전트 이력 반환 | 사원번호=%s | "
+            "conversation_id=%s | 선택에이전트=%s | 개수=%d",
+            employee_id,
+            conversation_id,
+            agent_code,
+            len(history),
+        )
+        return agent_code, history
 
     @timed("메모리 대화 메시지 저장")
     async def append_message(
@@ -432,6 +498,94 @@ class RedisChatHistoryStore:
             history,
         )
         return history
+
+    @timed("Redis conversation 최근 에이전트 이력 조회")
+    async def get_recent_for_conversation(
+        self,
+        employee_id: str,
+        conversation_id: str,
+        limit: int,
+    ) -> tuple[str | None, list[dict[str, str]]]:
+        """프론트 미선택 시 최근에 사용한 에이전트의 이력만 조회한다.
+
+        같은 conversation에 여러 agent_code 키가 있어도 각 키의 마지막 메시지
+        시각을 비교하여 하나만 선택한다. 따라서 에이전트별 이력 격리는 유지된다.
+        """
+
+        match = (
+            f"{self._project_code}:{self._key_prefix}:"
+            f"{employee_id}:{conversation_id}:*"
+        )
+        latest_agent_code: str | None = None
+        latest_created_at = ""
+        try:
+            async for key in self._client.scan_iter(match=match):
+                scope = self._scope_from_history_key(key)
+                if scope is None:
+                    continue
+                key_employee, key_conversation, key_agent = scope
+                if (
+                    key_employee != employee_id
+                    or key_conversation != conversation_id
+                ):
+                    continue
+
+                last_values = await self._client.lrange(key, -1, -1)
+                if not last_values:
+                    continue
+                try:
+                    entry = ChatHistoryEntry.model_validate_json(last_values[0])
+                except ValueError:
+                    logger.info(
+                        "======== Redis 최근 에이전트 후보 제외 | "
+                        "마지막 메시지 JSON 오류 | 키=%s",
+                        key,
+                    )
+                    continue
+                if (
+                    entry.project_code != self._project_code
+                    or entry.employee_id != employee_id
+                    or entry.agent_code.upper() != key_agent
+                ):
+                    continue
+                if entry.created_at > latest_created_at:
+                    latest_created_at = entry.created_at
+                    latest_agent_code = key_agent
+        except (RedisError, OSError, TimeoutError) as exc:
+            logger.info(
+                "======== Redis 최근 에이전트 조회 실패 | "
+                "대화이력 없이 계속 진행 | 사원번호=%s | "
+                "conversation_id=%s | 오류=%s",
+                employee_id,
+                conversation_id,
+                exc,
+            )
+            return None, []
+
+        if latest_agent_code is None:
+            logger.info(
+                "======== Redis 최근 에이전트 이력 없음 | 사원번호=%s | "
+                "conversation_id=%s",
+                employee_id,
+                conversation_id,
+            )
+            return None, []
+
+        history = await self.get_recent(
+            employee_id,
+            conversation_id,
+            latest_agent_code,
+            limit,
+        )
+        logger.info(
+            "======== Redis 최근 에이전트 이력 선택 | 사원번호=%s | "
+            "conversation_id=%s | 선택에이전트=%s | 개수=%d",
+            employee_id,
+            conversation_id,
+            latest_agent_code,
+            len(history),
+        )
+        return latest_agent_code, history
 
     @timed("Redis 대화 메시지 저장")
     async def append_message(

@@ -11,8 +11,10 @@ SC_AX는 카드 모집인 업무 질문을 처리하기 위한 FastAPI 기반 �
 4. 코드 불일치 시 Redis 기반 HITL 확인
 5. 등록된 서브에이전트의 시나리오·세부 시나리오·파라미터 분류
 6. 세부 시나리오 manifest에 정의된 GenOS MCP 도구 호출
-7. 분류 및 MCP 결과 반환
-8. 로컬 CSV에 질의별 최종 처리 결과 기록
+7. PERFORMANCE_FEE의 MCP 데이터 기반 고정 답변 생성
+8. QUALIFICATION의 MCP 문서 기반 GenOS RAG 답변 생성
+9. SSE token·출처·HITL action·종료 이벤트 스트리밍
+10. 로컬 CSV에 질의별 최종 처리 결과 기록
 
 LangGraph Checkpointer와 `langgraph.interrupt()`는 사용하지 않습니다. 대화
 이력은 일반 Redis List, HITL 상태는 일반 Redis String으로 직접 관리합니다.
@@ -26,7 +28,7 @@ LangGraph Checkpointer와 `langgraph.interrupt()`는 사용하지 않습니다. 
 flowchart TD
     A["POST /v1/chat 신규 질문"] --> B{"프론트 에이전트 선택?"}
     B -->|선택함| C["사원 + conversation + 선택 에이전트 이력 조회"]
-    B -->|선택 안 함| D["빈 이력 사용"]
+    B -->|선택 안 함| D["같은 conversation의<br/>최근 에이전트 이력 사용"]
     C --> E["마스터 LLM<br/>질문 보정 + 예외 판정 + 에이전트 분류"]
     D --> E
     E --> F{"AGENT 분류?"}
@@ -43,10 +45,10 @@ flowchart TD
     J --> K["보정 질문을 대화 이력에 저장"]
     K --> L{"등록된 서브에이전트?"}
     L -->|아니오| Z["PASS 반환"]
-    L -->|예| M["서브 LLM<br/>시나리오 + 세부 시나리오 + 파라미터"]
-    M --> N["manifest에서 MCP 도구와 인자 매핑 선택"]
-    N --> O["GenOS Gateway MCP tools/call"]
-    O --> P["structuredContent dict 반환"]
+    L -->|예| M["서브 LLM<br/>동일 에이전트 안의 1개 이상 시나리오 매칭"]
+    M --> N["각 match의 manifest MCP 도구와 인자 선택"]
+    N --> O["match별 GenOS Gateway MCP tools/call"]
+    O --> P["MCP 결과 배열 반환"]
     P --> Z
 ```
 
@@ -117,6 +119,20 @@ flowchart TD
 2. 예외 유형 판정
 3. 6개 업무 에이전트 중 하나 선택
 
+대화 이력은 항상 현재 질문에 합쳐지지 않습니다. 마스터는 현재 질문을 먼저
+독립적으로 해석하고, `그중 세금은?`, `지난달은?`처럼 생략된 참조 때문에 현재
+질문만으로 대상을 확정할 수 없을 때만 직접 관련된 최근 이력을 사용합니다.
+현재 질문이 `내 실적 알려줘`처럼 완결되어 있으면 이전 이력에 `RP`가 있더라도
+`내 RP 실적 알려줘`로 바꾸지 않습니다.
+
+예시:
+
+| 이전 대화 | 현재 질문 | 보정 결과 |
+|---|---|---|
+| `이번 달 수수료 내역을 알려줘` | `그중 세금은?` | `이번 달 수수료에서 차감된 세금 내역을 알려줘` |
+| `내 환산점수 알려줘` | `지난달은?` | `지난달 내 환산점수를 알려줘` |
+| `내 RP 알려줘` → `내 환산점수 알려줘` | `내 실적 알려줘` | `내 실적 알려줘` (이력 미반영) |
+
 ### 분류 유형
 
 | 값 | 의미 | agent_code |
@@ -158,6 +174,11 @@ Schema Enum을 실행 시점에 생성합니다.
 | `RP` | `RP` 유지, HITL 없음 |
 | `PERFORMANCE_FEE` | `PERFORMANCE_FEE` 유지 |
 | 미선택 | 기본 `PERFORMANCE_FEE` |
+
+예를 들어 `내 RP 실적을 조회해줘`라는 동일한 질문도 프론트 선택이
+`PERFORMANCE_FEE`이면 PERFORMANCE_FEE의 `COMPOSITE_CONVERSION_SCORE`로,
+프론트 선택이 `RP`이면 RP의 `COMPOSITE_CONVERSION_SCORE`로 처리합니다.
+두 경우 모두 에이전트 교체와 HITL이 발생하지 않습니다.
 
 수수료·세금·실지급액·12개월 추이·원천징수는 공통 업무가 아닙니다. 해당
 조회는 `PERFORMANCE_FEE` 업무입니다.
@@ -240,9 +261,9 @@ prompts/subagents/
 | 서브에이전트 | 시나리오 수 | 세부 시나리오 수 |
 |---|---:|---:|
 | `PERFORMANCE_FEE` | 5 | 11 |
-| `RP` | 4 | 5 |
+| `RP` | 3 | 4 |
 | `QUALIFICATION` | 4 | 6 |
-| 합계 | 13 | 22 |
+| 합계 | 12 | 21 |
 
 ### PERFORMANCE_FEE
 
@@ -262,12 +283,14 @@ RP 신청 기준·정책과 RP 화면에서 지원하는 조회를 처리합니�
 
 - RP 업무 문서 조회
 - 아파트관리비 RP 연결 가능 단지 조회
-- 실적 종합조회
 - 복합환산조회
   - `COMPOSITE_CONVERSION_SCORE`
   - `COMPOSITE_CONVERSION_EXCLUDED`
 
 RP에는 수수료·세금·실지급액·원천징수 세부 시나리오가 없습니다.
+일반적인 모집인 전체 실적 종합조회도 PERFORMANCE_FEE 전용입니다. RP에서
+공통으로 지원하는 실적 조회는 `RP 실적`, `RP 환산점수`처럼 RP·복합환산으로
+한정된 조회입니다.
 
 ### QUALIFICATION
 
@@ -303,6 +326,70 @@ RP에는 수수료·세금·실지급액·원천징수 세부 시나리오가 �
 
 고객의 개인정보 또는 고객 단위 상세 내용 요구는 QUALIFICATION까지 전달하지
 않고 마스터의 `CUSTOMER_DETAIL_REQUEST` 예외로 종료합니다.
+
+### 다중 시나리오 매칭 계약
+
+마스터는 에이전트 하나만 선택합니다. 서브에이전트는 선택된 자기 manifest 안에서
+질문에 포함된 독립 요청을 모두 `matches` 배열로 반환할 수 있습니다.
+
+```json
+{
+  "agent_code": "PERFORMANCE_FEE",
+  "prompt_version": "v1",
+  "scenario_code": "PERFORMANCE_SUMMARY",
+  "scenario_name": "실적 종합조회",
+  "detail_scenario_code": "PERFORMANCE_SUMMARY_TOTAL",
+  "detail_scenario_name": "실적 종합 조회",
+  "parameters": {},
+  "matches": [
+    {
+      "scenario_code": "PERFORMANCE_SUMMARY",
+      "scenario_name": "실적 종합조회",
+      "detail_scenario_code": "PERFORMANCE_SUMMARY_TOTAL",
+      "detail_scenario_name": "실적 종합 조회",
+      "parameters": {}
+    },
+    {
+      "scenario_code": "FEE_DETAILS",
+      "scenario_name": "수수료 내역 조회",
+      "detail_scenario_code": "FEE_TAX_NET_PAYMENT",
+      "detail_scenario_name": "세금 및 실지급액 조회",
+      "parameters": {}
+    }
+  ]
+}
+```
+
+규칙:
+
+- 단일 요청은 `matches` 한 개
+- 복합 질문은 관련된 모든 match 반환
+- 동일 세부 시나리오는 한 번만 반환
+- 다른 서브에이전트의 시나리오는 선택 불가
+- 최상위·세부 코드가 어긋나면 세부 코드의 실제 부모로 자동 보정
+- 기존 단일 필드는 하위 호환을 위해 첫 번째 match를 나타냄
+
+LLM이 명백한 복합 질문에서 일부 match를 누락하는 경우에는 각 서브에이전트
+manifest의 `required_match_rules`가 결과를 보완할 수 있습니다. 예를 들어
+PERFORMANCE_FEE에는 `실적`과 `수수료`가 모두 포함된 질문에 다음 두 세부
+시나리오를 보장하는 규칙이 선언되어 있습니다.
+
+```yaml
+required_match_rules:
+  - name: "실적과 일반 수수료 동시 조회"
+    all_terms: ["실적", "수수료"]
+    detail_codes:
+      - "PERFORMANCE_SUMMARY_TOTAL"
+      - "FEE_ITEM_DETAILS"
+```
+
+따라서 `내 실적과 수수료가 궁금해`라는 질문은 LLM이 하나만 반환하더라도
+최종 `matches`에 위 두 결과가 모두 포함됩니다. 이 업무 규칙은 Python이 아니라
+manifest에 있으므로 다른 복합 조합도 같은 방식으로 확장할 수 있습니다.
+
+각 match는 MCP를 한 번씩 호출합니다. 전체 결과는 `mcp_results` 배열이며 기존
+`mcp` 필드는 첫 번째 결과를 유지합니다. MCP JSON-RPC ID 끝에는 세부 시나리오
+코드가 붙으므로 같은 thread의 여러 호출도 고유하게 추적할 수 있습니다.
 
 ---
 
@@ -417,9 +504,11 @@ Redis 대화 이력이 꺼져 있거나 연결할 수 없으면:
 
 ### 프론트 에이전트 미선택
 
-마스터 분류 전에 어느 에이전트 이력을 가져와야 할지 결정할 수 없으므로 빈
-이력으로 분류합니다. 분류가 끝난 후 최종 agent_code 범위에 보정 질문을
-저장합니다.
+프론트에서 에이전트를 선택하지 않아도 멀티턴 문맥을 유지합니다. 같은
+`employee_id + conversation_id`에 저장된 이력 중 마지막 메시지가 가장 최근인
+에이전트 하나를 선택하고, 그 `agent_code` 범위의 이력만 마스터에 전달합니다.
+여러 에이전트 이력을 한꺼번에 합치지 않으므로 에이전트별 이력 격리는 유지됩니다.
+이력이 전혀 없거나 Redis를 사용할 수 없으면 빈 이력으로 현재 질문만 분류합니다.
 
 ---
 
@@ -586,7 +675,8 @@ WATCHFILES_FORCE_POLLING=true uvicorn main:app \
 ```
 
 프로젝트에 포함된 실행 스크립트를 사용하면 polling과 캐시 제외 설정을 자동으로
-적용합니다.
+적용합니다. Python뿐 아니라 프롬프트 Markdown, manifest YAML, 테스트 HTML
+변경도 감지하여 앱을 다시 시작합니다.
 
 ```bash
 bash scripts/run_dev_wsl.sh
@@ -629,7 +719,8 @@ python main.py
 | Swagger UI | `http://127.0.0.1:8080/docs` |
 | 상태 확인 | `http://127.0.0.1:8080/health` |
 | 메타데이터 | `http://127.0.0.1:8080/v1/metadata` |
-| 채팅 | `POST http://127.0.0.1:8080/v1/chat` |
+| 스트리밍 채팅 | `POST http://127.0.0.1:8080/v1/chat/stream` |
+| 기존 JSON 채팅 | `POST http://127.0.0.1:8080/v1/chat` |
 
 테스트 화면의 에이전트 목록은 HTML에 하드코딩하지 않고 `/v1/metadata`에서
 불러옵니다.
@@ -677,12 +768,25 @@ RP가 해당 공통 업무를 지원하므로 정상 분류되면 HITL 없이 �
       "address": null,
       "closing_year_month": "202607",
       "reference_date": null
-    }
+    },
+    "matches": [
+      {
+        "scenario_code": "COMPOSITE_CONVERSION",
+        "scenario_name": "복합환산조회",
+        "detail_scenario_code": "COMPOSITE_CONVERSION_EXCLUDED",
+        "detail_scenario_name": "환산 미반영 내역 조회",
+        "parameters": {
+          "address": null,
+          "closing_year_month": "202607",
+          "reference_date": null
+        }
+      }
+    ]
   },
   "mcp": {
     "backend": "http",
     "tool_name": "test_tool",
-    "request_id": "acqsc:EMP001:conversation-001:서버-thread-id",
+    "request_id": "acqsc:EMP001:conversation-001:서버-thread-id:COMPOSITE_CONVERSION_EXCLUDED",
     "arguments": {
       "param1": "data1",
       "param2": "data2"
@@ -691,6 +795,20 @@ RP가 해당 공통 업무를 지원하므로 정상 분류되면 HITL 없이 �
     "result": {},
     "error": null
   },
+  "mcp_results": [
+    {
+      "backend": "http",
+      "tool_name": "test_tool",
+      "request_id": "acqsc:EMP001:conversation-001:서버-thread-id:COMPOSITE_CONVERSION_EXCLUDED",
+      "arguments": {
+        "param1": "data1",
+        "param2": "data2"
+      },
+      "succeeded": true,
+      "result": {},
+      "error": null
+    }
+  ],
   "interrupt": null
 }
 ```
@@ -724,6 +842,7 @@ RP가 해당 공통 업무를 지원하므로 정상 분류되면 HITL 없이 �
   },
   "subagent": null,
   "mcp": null,
+  "mcp_results": [],
   "interrupt": {
     "type": "AGENT_CODE_MISMATCH",
     "message": "선택한 에이전트와 질문 의도가 다릅니다.",
@@ -763,7 +882,269 @@ RP가 해당 공통 업무를 지원하므로 정상 분류되면 HITL 없이 �
 
 ---
 
-## 17. API 상태와 오류
+## 17. SSE 스트리밍 채팅 API
+
+신규 프론트는 `POST /v1/chat/stream`을 사용합니다. 기존 `/v1/chat` 단일 JSON
+API는 이전 테스트와 소비자 호환을 위해 유지합니다. 두 경로는 같은 LangGraph,
+Redis 이력, HITL 상태, 서브에이전트 및 MCP 실행기를 공유합니다.
+
+### 입력 필드
+
+| 필드 | 타입 | 신규 질문 | HITL 재진입 | 설명 |
+|---|---|---:|---:|---|
+| `message` | string | 필수 | 사용 불가 | 사용자 질문 |
+| `session_id` | string | 필수 | 필수 | 기존 `conversation_id`, 멀티턴 대화 범위 |
+| `thread_id` | string | 생략 | 필수 | 신규 요청에서는 서버 생성, action 이후 동일 값 반환 |
+| `endpoint` | string | 필수 | 필수 | 현재 허용값 `acqsc` |
+| `agent_code` | string/null | 선택 | 생략 | 기존 `frontend_agent_code` |
+| `employee_id` | string | 필수 | 필수 | 사원별 이력과 HITL 소유권 검증 |
+| `humanInput` | array | `[]` 또는 생략 | 한 건 이상 | 사용자 입력 목록 |
+| `humanInput[].code` | string | 해당 없음 | 필수 | action의 `inputs[].code`와 동일한 값 |
+| `humanInput[].input` | JSON 값 | 해당 없음 | 필수 | 승인 또는 MCP 파라미터 입력값 |
+
+운영 외부 요청에는 GenOS Gateway가 검증하는 다음 헤더도 포함합니다.
+
+```http
+Authorization: Bearer {AccessToken}
+Accept: text/event-stream
+Content-Type: application/json
+```
+
+로컬 `/tester`는 Gateway 밖에서 화면을 시험하므로 Authorization 없이 호출할 수
+있습니다. 운영에서 FastAPI 자체 토큰 검증까지 요구한다면 별도 인증 의존성을
+추가해야 합니다.
+
+### 신규 질문 예시
+
+```json
+{
+  "message": "내 실적을 알려줘",
+  "session_id": "session-001",
+  "endpoint": "acqsc",
+  "agent_code": "PERFORMANCE_FEE",
+  "employee_id": "EMP001",
+  "humanInput": []
+}
+```
+
+신규 질문에는 `thread_id`를 보내지 않습니다. 서버가 UUID를 생성하여 스트림의
+`thread_id` 이벤트로 반환합니다.
+
+터미널에서 버퍼링 없이 확인:
+
+```bash
+curl -N -X POST http://127.0.0.1:8080/v1/chat/stream \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -d '{
+    "message":"내 실적을 알려줘",
+    "session_id":"session-001",
+    "endpoint":"acqsc",
+    "agent_code":"PERFORMANCE_FEE",
+    "employee_id":"EMP001",
+    "humanInput":[]
+  }'
+```
+
+GenOS Gateway를 통할 때는 위 요청에 `Authorization: Bearer ...` 헤더를
+추가하고 Gateway의 코드 서빙 prefix를 URL 앞에 붙입니다.
+
+### SSE envelope
+
+모든 이벤트는 동일한 JSON envelope를 사용합니다.
+
+```text
+data: {"event":"token","data":"답변 일부"}
+
+```
+
+실제 wire 형식에서 각 이벤트 끝에는 빈 줄을 만드는 `\n\n`이 필요합니다.
+JSON은 한 줄로 직렬화하므로 한글 답변이나 줄바꿈도 안전하게 전달됩니다.
+
+### 이벤트 목록과 순서
+
+| 이벤트 | data 타입 | 설명 |
+|---|---|---|
+| `request_id` | string | HTTP 요청 한 번의 장애·로그 추적 ID |
+| `session_id` | string | 요청의 멀티턴 세션 ID |
+| `thread_id` | string | 한 질문과 HITL 재진입을 연결하는 ID |
+| `message_id` | object | `{role, id}` 사용자·답변 메시지 연결 |
+| `messages` | array | 사용자 메시지 및 처리 metadata 동기화 |
+| `sourceDocuments` | array | RAG에 전달한 MCP 문서와 출처 metadata |
+| `token` | string | 순서대로 이어 붙일 답변 조각 |
+| `action` | object | HITL 입력창 정의와 검증 오류 |
+| `duration` | object | `{seconds, formatted}` 소수점 셋째 자리 초 |
+| `stopped` | object | 서버가 정상적으로 중단을 확정한 경우의 중단 정보 |
+| `end` | object | 정상 스트림 종료와 최종 상태 |
+| `error` | object | 안전한 오류 코드·문구·request_id |
+
+일반 정상 응답 순서:
+
+```text
+request_id → session_id → thread_id → message_id → messages
+→ sourceDocuments(RAG만) → token 여러 건 → 완성 messages → duration → end
+```
+
+HITL 응답 순서:
+
+```text
+request_id → session_id → thread_id → message_id → messages
+→ action → duration → end(status=INPUT_REQUIRED)
+```
+
+스트림 내부에서 오류가 발생하면 이미 HTTP 200과 SSE 헤더가 전송된 뒤일 수
+있으므로 `error` 이벤트로 반환합니다. Pydantic 요청 검증이나 잘못된 endpoint처럼
+스트림을 열기 전에 발견한 오류는 일반 HTTP 422 JSON입니다.
+
+브라우저가 `AbortController`로 연결을 끊으면 해당 브라우저는 이후 이벤트를 받을
+수 없으므로 서버는 중단 사실을 로그에 기록합니다. `stopped` 이벤트는 향후 별도
+중단 API나 서버 측 업무 중단 조건을 추가했을 때 같은 SSE envelope로 전달하기
+위해 예약돼 있습니다. 단순 연결 종료 직후 클라이언트가 `stopped`를 받을 수
+있다고 가정하면 안 됩니다.
+
+### PERFORMANCE_FEE 고정 데이터 답변
+
+현재 PERFORMANCE_FEE의 모든 세부 시나리오는 manifest에 선언된 `test_tool`을
+먼저 호출합니다. `result.structuredContent`에서 얻은 dict를 다음 형식의 고정
+답변으로 변환한 뒤 여러 `token` 이벤트로 분할합니다.
+
+```text
+테스트 고정답변입니다.
+1. test_tool 조회 결과: {"param1":"data1","param2":"data2"}
+```
+
+고정 데이터 포맷 변경 위치:
+
+- `app/answers.py`의 `_build_fixed_data_answer()`
+- 세부 시나리오별 MCP 선택은 각 서브에이전트 `manifest.yaml`
+
+실제 화면용 표·카드 JSON이 필요하다면 문자열을 직접 조합하기보다 답변 manifest에
+템플릿 코드 또는 formatter 이름을 추가하고 formatter registry를 연결하는 방식이
+권장됩니다.
+
+### QUALIFICATION RAG 답변
+
+QUALIFICATION도 먼저 `test_tool`을 호출합니다. 이후 각 MCP 결과를 다음 공통
+문서 구조로 변환합니다.
+
+```json
+{
+  "document_id": "MCP추적ID:document:1",
+  "title": "test_tool 조회 문서",
+  "source": "test_tool",
+  "content": {"param1": "data1", "param2": "data2"},
+  "metadata": {
+    "mcp_request_id": "추적 ID",
+    "arguments": {"param1": "data1", "param2": "data2"}
+  }
+}
+```
+
+이 배열은 프론트에 `sourceDocuments`로 먼저 전송되고, 동시에 사용자 보정 질문과
+함께 GenOS LLM에 전달됩니다. LLM은
+`prompts/answer-generation/v1/rag/system.md`의 규칙으로 답변합니다.
+
+GenOS가 스트리밍을 지원하면 `ChatOpenAI.astream()` 토큰을 그대로 전달합니다.
+OpenAI 호환 서버가 스트리밍을 지원하지 않고 첫 토큰 전에 실패하면 일반
+`ainvoke()`로 한 번 재시도하여 결과 문자열을 token 이벤트로 나눕니다.
+
+단위 테스트처럼 `GENOS_BEARER_TOKEN`이 없는 주입 환경에서는 외부 호출 없이
+`테스트 RAG 답변입니다` 문구와 문서 내용을 스트리밍합니다. 실제 실행은 기존과
+동일하게 토큰이 필요하므로 운영에서 이 대체 경로가 사용되지는 않습니다.
+
+### EXCEPTION 고정 답변
+
+마스터가 다음 유형을 반환하면 서브에이전트와 MCP를 호출하지 않고 고정 답변을
+token 이벤트로 보냅니다.
+
+- `EMPTY_QUERY`
+- `OUT_OF_SCOPE`
+- `OTHER_RECRUITER_DATA_REQUEST`
+- `CUSTOMER_DETAIL_REQUEST`
+
+문구는 다음 파일에서 코드 수정 없이 변경할 수 있습니다.
+
+```text
+prompts/answer-generation/v1/manifest.yaml
+  exception_answers
+```
+
+EXCEPTION 질문과 답변은 기존 보안 정책대로 대화 이력에 저장하지 않습니다.
+정상 PASS에서는 보정된 사용자 질문과 최종 assistant 답변을 같은
+`employee_id + session_id + agent_code` 범위에 저장합니다.
+
+### 답변 모드 커스터마이징
+
+답변 모드는 다음 manifest에서 관리합니다.
+
+```yaml
+# prompts/answer-generation/v1/manifest.yaml
+agent_response_modes:
+  PERFORMANCE_FEE: "fixed_data"
+  QUALIFICATION: "rag"
+  RP: "fixed_data"
+default_response_mode: "fixed_data"
+```
+
+새 서브에이전트를 추가할 때의 순서:
+
+1. `prompts/subagents/registry.yaml`에 서브에이전트 등록
+2. 해당 서브에이전트 manifest에 시나리오별 MCP `tool_name`과 인자 매핑 등록
+3. `prompts/answer-generation/v1/manifest.yaml`에 `fixed_data` 또는 `rag` 지정
+4. 고정 답변이면 formatter를 추가하고, RAG이면 MCP dict→문서 변환 규칙 검토
+5. `sourceDocuments`, token, end 이벤트 통합 테스트 추가
+
+현재 `_build_source_documents()`는 모든 MCP dict를 일반 문서로 바꿉니다. 실제
+RAG 도구의 반환값에 `title`, `content`, `page`, `score` 등이 생기면 이 함수에
+도구별 adapter registry를 추가하는 것이 좋습니다.
+
+### HITL humanInput
+
+`action.inputs[].code`를 다음 요청의 `humanInput[].code`로 그대로 반환합니다.
+
+```json
+{
+  "session_id": "session-001",
+  "thread_id": "action에서 받은 thread_id",
+  "endpoint": "acqsc",
+  "employee_id": "EMP001",
+  "humanInput": [
+    {"code": "signal", "input": "OK"}
+  ]
+}
+```
+
+재진입 시 Redis에 저장된 원래 `employee_id`, `session_id`와 현재 요청값이 모두
+일치해야 합니다. 다른 사용자의 thread_id를 전달하면 상태를 찾을 수 없는 것과
+같은 `HITL_STATE_NOT_FOUND` 오류 이벤트를 반환합니다.
+
+### Redis·GenOS 없이 스트리밍 목업 실행
+
+```bash
+python -m scripts.run_mock_stream_server
+```
+
+기본 주소는 `http://127.0.0.1:8010/tester`입니다. 이 개발 서버에서는 다음
+질문으로 각 모드를 확인할 수 있습니다.
+
+| 질문 | 테스트 흐름 |
+|---|---|
+| `내 실적을 알려줘` | PERFORMANCE_FEE → test_tool → 고정 token 답변 |
+| `신규회원 자격기준 알려줘` | QUALIFICATION → test_tool → sourceDocuments → 테스트 RAG token |
+| `오늘 날씨 알려줘` | OUT_OF_SCOPE → EXCEPTION 고정 token 답변 |
+
+포트 변경:
+
+```bash
+MOCK_STREAM_PORT=8011 python -m scripts.run_mock_stream_server
+```
+
+목업의 `SSE 이벤트 전체 보기`를 펼치면 실제 수신 순서와 data 값을 확인할 수
+있습니다. token 이벤트는 수신되는 즉시 답변 영역 뒤에 추가됩니다.
+
+---
+
+## 18. API 상태와 오류
 
 ### 응답 status
 
@@ -783,7 +1164,7 @@ RP가 해당 공통 업무를 지원하므로 정상 분류되면 HITL 없이 �
 
 ---
 
-## 18. 테스트 화면 전용 API
+## 19. 테스트 화면 전용 API
 
 테스트 HTML은 다음 API를 사용합니다.
 
@@ -798,7 +1179,7 @@ RP가 해당 공통 업무를 지원하므로 정상 분류되면 HITL 없이 �
 
 ---
 
-## 19. 로컬 CSV 의도분류 추적
+## 20. 로컬 CSV 의도분류 추적
 
 활성화:
 
@@ -843,7 +1224,7 @@ CSV에는 질문과 MCP 결과 등 업무 데이터가 들어갈 수 있으므�
 
 ---
 
-## 20. 로그와 소요시간
+## 21. 로그와 소요시간
 
 로그는 각 단계를 다음 형태로 구분합니다.
 
@@ -865,7 +1246,7 @@ CSV에는 질문과 MCP 결과 등 업무 데이터가 들어갈 수 있으므�
 
 ---
 
-## 21. 테스트
+## 22. 테스트
 
 전체 테스트:
 
@@ -894,13 +1275,16 @@ python -m unittest discover -s tests -v
 - PERFORMANCE_FEE·RP·QUALIFICATION 시나리오
 - MCP 도구·인자·추적 ID·응답 파싱
 - 단일 CSV 파일과 thread_id별 한 행 갱신
+- SSE 고정 데이터·RAG·EXCEPTION 답변 이벤트
+- sourceDocuments와 token 순서
+- action과 humanInput HITL 재진입
 
 Redis 서버가 없으면 Redis 통합 테스트만 건너뛰고 나머지 테스트는 실행할 수
 있습니다.
 
 ---
 
-## 22. 프로젝트 구조
+## 23. 프로젝트 구조
 
 ```text
 SC_AX/
@@ -910,6 +1294,7 @@ SC_AX/
 ├── intent_classification.ipynb
 ├── app/
 │   ├── api.py
+│   ├── answers.py
 │   ├── classifier.py
 │   ├── config.py
 │   ├── csv_trace.py
@@ -921,6 +1306,7 @@ SC_AX/
 │   ├── models.py
 │   ├── observability.py
 │   ├── prompt_loader.py
+│   ├── streaming.py
 │   ├── mcp/
 │   │   ├── client.py
 │   │   └── models.py
@@ -929,6 +1315,7 @@ SC_AX/
 │       ├── prompt_loader.py
 │       └── router.py
 ├── prompts/
+│   ├── answer-generation/
 │   ├── intent-classification/
 │   └── subagents/
 ├── static/
@@ -943,6 +1330,8 @@ SC_AX/
 | 파일 | 역할 |
 |---|---|
 | `app/api.py` | FastAPI 조립과 `/v1/chat` 통합 API |
+| `app/answers.py` | 고정 데이터·EXCEPTION·RAG 최종 답변 생성 |
+| `app/streaming.py` | SSE 직렬화, token 분할, action 변환 |
 | `app/graph.py` | 신규·HITL 재진입 LangGraph 흐름 |
 | `app/classifier.py` | GenOS 마스터 Structured Output 호출 |
 | `app/history.py` | 대화 이력 메모리·Redis 구현 |

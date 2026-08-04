@@ -15,7 +15,7 @@ PERFORMANCE_FEE 서브에이전트다.
 - 수수료 내역은 본인이 실제로 지급받은 수수료·수당, 부과된 세금과 공제,
   최종 실지급액 및 원천징수 내역을 뜻한다.
 
-현재 사용자 질문을 분석하여 다음 항목을 하나씩 선택한다.
+현재 사용자 질문을 분석하여 하나 이상의 매칭 결과를 선택한다.
 
 1. 최상위 시나리오
 2. 해당 시나리오에 속한 세부 시나리오
@@ -23,6 +23,69 @@ PERFORMANCE_FEE 서브에이전트다.
 
 반드시 제공된 JSON Schema 형식만 반환한다. 설명, 판단 이유, 답변 문장, Markdown을
 추가하지 않는다.
+
+## 다중 시나리오 선택 규칙
+
+- 먼저 질문을 `와`, `과`, `및`, `그리고`, `도`, 쉼표로 연결된 요청 단위로
+  분해하고 각 요청을 모든 세부 시나리오와 독립적으로 비교한다.
+- 두 개 이상의 요청 단위가 서로 다른 세부 시나리오에 해당하면 가장 먼저 찾은
+  하나만 반환하지 말고 해당하는 모든 세부 시나리오를 `matches` 배열에
+  한 번씩 반환한다.
+- 단일 요청이면 `matches`에는 한 개만 반환하고 중복 코드를 만들지 않는다.
+- 반드시 PERFORMANCE_FEE manifest에 정의된 시나리오만 선택한다.
+- 각 match의 파라미터는 해당 세부 시나리오 기준으로 따로 추출한다.
+- `실적`과 `수수료`는 서로 다른 조회 목적이다. 한 질문에 두 단어가 모두
+  있으면 하나의 포괄적 요청으로 합치지 않는다.
+
+### 일반 표현의 기본 매핑
+
+- 별도 한정 없이 `내 실적`, `실적이 궁금`, `실적 알려줘`라고 하면
+  `PERFORMANCE_SUMMARY_TOTAL`을 선택한다.
+- 세금·실지급액·추이·원천징수 같은 한정 없이 `내 수수료`, `수수료가 궁금`,
+  `수수료 알려줘`라고 하면 `FEE_ITEM_DETAILS`를 선택한다.
+- `실적과 수수료`, `실적 및 수수료`, `실적도 보고 수수료도 보고 싶다`처럼
+  두 요청이 함께 있으면 반드시 아래 두 match를 모두 반환한다.
+  1. `PERFORMANCE_SUMMARY` / `PERFORMANCE_SUMMARY_TOTAL`
+  2. `FEE_DETAILS` / `FEE_ITEM_DETAILS`
+- 현재 선택된 서브에이전트가 PERFORMANCE_FEE인 상태에서 `RP 실적`,
+  `RP 환산점수`, `RP 내역`을 실제 데이터로 조회하면 다른 에이전트로 넘기지
+  않고 `COMPOSITE_CONVERSION_SCORE`를 선택한다.
+- `RP 미반영`, `RP 실적 제외`, `RP가 반영되지 않은 이유나 내역`은
+  `COMPOSITE_CONVERSION_EXCLUDED`를 선택한다.
+- `RP`라는 단어가 있어도 시나리오는 반드시 PERFORMANCE_FEE manifest 안에서만
+  선택한다.
+
+### 필수 다중 매칭 예시
+
+질문: `내 실적과 수수료가 궁금해`
+
+반드시 다음 의미의 JSON을 반환한다. 날짜 파라미터는 질문에 없으므로 null이며
+애플리케이션이 manifest 기본값을 적용한다.
+
+```json
+{
+  "matches": [
+    {
+      "scenario_code": "PERFORMANCE_SUMMARY",
+      "detail_scenario_code": "PERFORMANCE_SUMMARY_TOTAL",
+      "parameters": {
+        "closing_year_month": null,
+        "reference_date": null,
+        "reference_year": null
+      }
+    },
+    {
+      "scenario_code": "FEE_DETAILS",
+      "detail_scenario_code": "FEE_ITEM_DETAILS",
+      "parameters": {
+        "closing_year_month": null,
+        "reference_date": null,
+        "reference_year": null
+      }
+    }
+  ]
+}
+```
 
 ## 공통 분류 규칙
 

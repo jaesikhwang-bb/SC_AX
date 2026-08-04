@@ -14,7 +14,7 @@ from app.hitl_store import (
     InMemoryHitlStateStore,
 )
 from app.subagents.router import EmptySubagentRouter
-from app.subagents.models import SubagentResult
+from app.subagents.models import SubagentResult, SubagentScenarioMatch
 
 
 class FakeClassifier:
@@ -80,6 +80,44 @@ class FakePerformanceFeeRouter(EmptySubagentRouter):
         )
 
 
+class FakeMultiScenarioRouter(FakePerformanceFeeRouter):
+    """한 질문에서 같은 서브에이전트의 두 시나리오를 반환한다."""
+
+    async def classify(self, *, agent_code: str, query: str):
+        first = SubagentScenarioMatch(
+            scenario_code="PERFORMANCE_SUMMARY",
+            scenario_name="실적 종합조회",
+            detail_scenario_code="PERFORMANCE_SUMMARY_TOTAL",
+            detail_scenario_name="실적 종합 조회",
+            parameters={
+                "closing_year_month": "202607",
+                "reference_date": None,
+                "reference_year": None,
+            },
+        )
+        second = SubagentScenarioMatch(
+            scenario_code="FEE_DETAILS",
+            scenario_name="수수료 내역 조회",
+            detail_scenario_code="FEE_TAX_NET_PAYMENT",
+            detail_scenario_name="세금 및 실지급액 조회",
+            parameters={
+                "closing_year_month": "202606",
+                "reference_date": None,
+                "reference_year": None,
+            },
+        )
+        return SubagentResult(
+            agent_code=agent_code,
+            prompt_version="v1",
+            scenario_code=first.scenario_code,
+            scenario_name=first.scenario_name,
+            detail_scenario_code=first.detail_scenario_code,
+            detail_scenario_name=first.detail_scenario_name,
+            parameters=first.parameters,
+            matches=[first, second],
+        )
+
+
 class FailingHitlStateStore(InMemoryHitlStateStore):
     """HITL Redis 장애에 대응하는 HTTP 계약을 검증하기 위한 저장소."""
 
@@ -87,7 +125,7 @@ class FailingHitlStateStore(InMemoryHitlStateStore):
         raise HitlStateStoreUnavailableError("테스트용 Redis 장애")
 
 
-def test_settings() -> Settings:
+def make_test_settings() -> Settings:
     return Settings(
         genos_url="https://genos.genon.ai",
         genos_serving_id=850,
@@ -116,7 +154,7 @@ class ChatApiTest(unittest.TestCase):
         self.hitl_store = InMemoryHitlStateStore()
         self.client_context = TestClient(
             create_app(
-                settings=test_settings(),
+                settings=make_test_settings(),
                 classifier=FakeClassifier(),
                 history_store=EmptyChatHistoryStore(),
                 hitl_store=self.hitl_store,
@@ -136,6 +174,7 @@ class ChatApiTest(unittest.TestCase):
 
         self.assertEqual(200, page.status_code)
         self.assertIn("1차 의도분류 테스트", page.text)
+        self.assertIn('requestStream("v1/chat/stream"', page.text)
         self.assertEqual(200, metadata.status_code)
         self.assertEqual(6, len(metadata.json()["agent_codes"]))
         self.assertIn("RP", metadata.json()["agent_codes"])
@@ -162,6 +201,7 @@ class ChatApiTest(unittest.TestCase):
                 "classification",
                 "subagent",
                 "mcp",
+                "mcp_results",
                 "interrupt",
             },
             set(body),
@@ -206,7 +246,7 @@ class ChatApiTest(unittest.TestCase):
 
         with TestClient(
             create_app(
-                settings=test_settings(),
+                settings=make_test_settings(),
                 classifier=FakePerformanceFeeClassifier(),
                 history_store=EmptyChatHistoryStore(),
                 hitl_store=InMemoryHitlStateStore(),
@@ -228,6 +268,7 @@ class ChatApiTest(unittest.TestCase):
             "PERFORMANCE_SUMMARY_TOTAL",
             response.json()["subagent"]["detail_scenario_code"],
         )
+        self.assertEqual(1, len(response.json()["subagent"]["matches"]))
         self.assertEqual("test_tool", response.json()["mcp"]["tool_name"])
         self.assertIn(
             "EMP001",
@@ -237,6 +278,46 @@ class ChatApiTest(unittest.TestCase):
             {"param1": "data1", "param2": "data2"},
             response.json()["mcp"]["result"],
         )
+        self.assertEqual(1, len(response.json()["mcp_results"]))
+
+    def test_one_subagent_returns_multiple_scenarios_and_mcp_results(
+        self,
+    ) -> None:
+        """서브에이전트는 고정한 채 여러 시나리오와 MCP를 반환해야 한다."""
+
+        with TestClient(
+            create_app(
+                settings=make_test_settings(),
+                classifier=FakePerformanceFeeClassifier(),
+                history_store=EmptyChatHistoryStore(),
+                hitl_store=InMemoryHitlStateStore(),
+                subagent_router=FakeMultiScenarioRouter(),
+            )
+        ) as client:
+            response = client.post(
+                "/v1/chat",
+                json={
+                    "message": "이번 달 실적과 세금 실지급액을 알려줘",
+                    "employee_id": "EMP001",
+                    "frontend_agent_code": "PERFORMANCE_FEE",
+                },
+            )
+
+        body = response.json()
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("PERFORMANCE_FEE", body["subagent"]["agent_code"])
+        self.assertEqual(2, len(body["subagent"]["matches"]))
+        self.assertEqual(
+            ["PERFORMANCE_SUMMARY_TOTAL", "FEE_TAX_NET_PAYMENT"],
+            [item["detail_scenario_code"] for item in body["subagent"]["matches"]],
+        )
+        self.assertEqual(2, len(body["mcp_results"]))
+        self.assertEqual(
+            2,
+            len({item["request_id"] for item in body["mcp_results"]}),
+        )
+        # 기존 호환 필드는 첫 번째 결과를 유지한다.
+        self.assertEqual(body["mcp_results"][0], body["mcp"])
 
     def test_same_conversation_id_supplies_previous_turn_to_classifier(
         self,
@@ -247,7 +328,7 @@ class ChatApiTest(unittest.TestCase):
         with TestClient(
             create_app(
                 settings=replace(
-                    test_settings(),
+                    make_test_settings(),
                     history_backend="memory",
                 ),
                 classifier=classifier,
@@ -296,6 +377,56 @@ class ChatApiTest(unittest.TestCase):
             second.json()["classification"]["refined_query"],
         )
 
+    def test_no_frontend_selection_still_uses_conversation_history(
+        self,
+    ) -> None:
+        """에이전트 미선택 멀티턴도 최근 에이전트 이력을 전달해야 한다."""
+
+        classifier = HistoryAwareClassifier()
+        history_store = InMemoryChatHistoryStore()
+        with TestClient(
+            create_app(
+                settings=replace(
+                    make_test_settings(),
+                    history_backend="memory",
+                ),
+                classifier=classifier,
+                history_store=history_store,
+                hitl_store=InMemoryHitlStateStore(),
+                subagent_router=EmptySubagentRouter(),
+            )
+        ) as client:
+            first = client.post(
+                "/v1/chat",
+                json={
+                    "message": "2026년 6월 수수료 알려줘",
+                    "employee_id": "EMP001",
+                    "conversation_id": "multiturn-no-selection",
+                },
+            )
+            second = client.post(
+                "/v1/chat",
+                json={
+                    "message": "저번달은?",
+                    "employee_id": "EMP001",
+                    "conversation_id": "multiturn-no-selection",
+                },
+            )
+
+        self.assertEqual(200, first.status_code)
+        self.assertEqual(200, second.status_code)
+        self.assertEqual([], classifier.received_histories[0])
+        self.assertEqual(
+            [
+                {
+                    "role": "user",
+                    "content": "2026년 6월 수수료 내역을 조회해줘",
+                }
+            ],
+            classifier.received_histories[1],
+        )
+        self.assertEqual("PASS", second.json()["status"])
+
     def test_tester_history_returns_only_requested_scope(self) -> None:
         """목업 이력 API는 요청한 사원·대화·에이전트 이력만 반환해야 한다."""
 
@@ -303,7 +434,7 @@ class ChatApiTest(unittest.TestCase):
         with TestClient(
             create_app(
                 settings=replace(
-                    test_settings(),
+                    make_test_settings(),
                     history_backend="memory",
                 ),
                 classifier=FakeClassifier(),
@@ -353,9 +484,9 @@ class ChatApiTest(unittest.TestCase):
 
         self.assertEqual(200, page.status_code)
         self.assertIn("대화내역 보기", page.text)
-        self.assertIn("/v1/tester/history", page.text)
+        self.assertIn("v1/tester/history?", page.text)
         self.assertIn("프로젝트 전체 대화 관리", page.text)
-        self.assertIn("/v1/tester/conversations", page.text)
+        self.assertIn("v1/tester/conversations", page.text)
 
     def test_tester_can_list_and_delete_project_conversation(self) -> None:
         """목업에서 프로젝트 대화 목록을 조회하고 선택 대화를 삭제한다."""
@@ -364,7 +495,7 @@ class ChatApiTest(unittest.TestCase):
         with TestClient(
             create_app(
                 settings=replace(
-                    test_settings(),
+                    make_test_settings(),
                     history_backend="memory",
                 ),
                 classifier=FakeClassifier(),
@@ -487,7 +618,7 @@ class ChatApiTest(unittest.TestCase):
 
         with TestClient(
             create_app(
-                settings=test_settings(),
+                settings=make_test_settings(),
                 classifier=FakeClassifier(),
                 history_store=EmptyChatHistoryStore(),
                 hitl_store=FailingHitlStateStore(),
@@ -513,13 +644,13 @@ class ChatApiTest(unittest.TestCase):
     def test_redis_free_development_mode_keeps_hitl_flow(self) -> None:
         """Redis가 없어도 불일치 결과와 후속 승인이 정상 동작해야 한다."""
 
-        # test_settings의 기본 hitl_state_backend는 memory이다. hitl_store를
+        # make_test_settings의 기본 hitl_state_backend는 memory이다. hitl_store를
         # 일부러 주입하지 않아 create_app이 메모리 저장소를 선택하게 한다.
         with TestClient(
             create_app(
                 # 연결될 수 없는 주소를 넣어 Redis 접근이 전혀 없음을 검증한다.
                 settings=replace(
-                    test_settings(),
+                    make_test_settings(),
                     redis_url="redis://127.0.0.1:1/0",
                 ),
                 classifier=FakeClassifier(),

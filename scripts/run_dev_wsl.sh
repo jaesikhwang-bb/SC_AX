@@ -18,5 +18,9 @@ exec uvicorn main:app \
   --host "${HOST}" \
   --port "${PORT}" \
   --reload \
+  --reload-include "*.py" \
+  --reload-include "*.md" \
+  --reload-include "*.yaml" \
+  --reload-include "*.html" \
   --reload-exclude ".pytest_cache" \
   --reload-exclude ".pytest_cache/*"

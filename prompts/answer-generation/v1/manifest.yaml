@@ -1,0 +1,23 @@
+version: "1.0.0"
+released_at: "2026-08-04"
+
+rag_system_prompt: "rag/system.md"
+
+model:
+  temperature: 0
+
+# 에이전트별 최종 답변 생성 방식이다.
+# fixed_data: MCP 조회 dict를 정해진 형식으로 출력
+# rag: MCP 조회 dict를 참고 문서로 사용하여 LLM이 답변 생성
+agent_response_modes:
+  PERFORMANCE_FEE: "fixed_data"
+  QUALIFICATION: "rag"
+  RP: "fixed_data"
+
+default_response_mode: "fixed_data"
+
+exception_answers:
+  EMPTY_QUERY: "질문 내용을 확인할 수 없습니다. 조회하거나 문의할 내용을 구체적으로 입력해 주세요."
+  OUT_OF_SCOPE: "카드 모집인 업무와 관련된 질문을 입력해 주세요."
+  OTHER_RECRUITER_DATA_REQUEST: "로그인한 모집인 본인 이외의 다른 모집인 정보는 조회할 수 없습니다."
+  CUSTOMER_DETAIL_REQUEST: "특정 고객의 상세 정보나 개인정보는 조회할 수 없습니다. 일반적인 업무 기준을 질문해 주세요."

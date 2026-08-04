@@ -7,6 +7,10 @@
 ## FEE_ITEM_DETAILS
 
 - 본인에게 지급된 항목별 수수료 또는 수당 내역
+- 세금·실지급액·추이·원천징수 한정 없이 "내 수수료", "수수료가 궁금해"라고
+  묻는 일반 수수료 조회
+- 같은 질문에 실적 조회도 있으면 이 세부 시나리오를 유지한 채
+  `PERFORMANCE_SUMMARY_TOTAL`을 별도 match로 추가한다.
 - 파라미터: closing_year_month
 
 ## FEE_TAX_NET_PAYMENT

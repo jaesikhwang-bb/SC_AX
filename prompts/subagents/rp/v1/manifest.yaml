@@ -1,4 +1,4 @@
-version: "1.2.0"
+version: "1.3.0"
 released_at: "2026-07-31"
 agent_code: "RP"
 
@@ -6,7 +6,6 @@ prompt_files:
   - "system.md"
   - "scenarios/01_rp_documents.md"
   - "scenarios/02_apartment_management_fee_rp_eligibility.md"
-  - "scenarios/03_performance_summary.md"
   - "scenarios/04_composite_conversion.md"
 
 model:
@@ -60,30 +59,6 @@ scenarios:
         parameter_rules:
           address:
             default: "NONE"
-
-  - code: "PERFORMANCE_SUMMARY"
-    name: "실적 종합조회"
-    description: "로그인한 카드 모집인 본인의 전체 환산점수와 실적건수를 조회"
-    details:
-      - code: "PERFORMANCE_SUMMARY_TOTAL"
-        name: "실적 종합 조회"
-        description: "로그인한 카드 모집인 본인의 환산점수와 실적건수를 종합 조회"
-        mcp:
-          tool_name: "test_tool"
-          arguments:
-            param1:
-              source: "literal"
-              value: "data1"
-            param2:
-              source: "literal"
-              value: "data2"
-        parameter_rules:
-          closing_year_month:
-            default: "CURRENT_MONTH"
-          reference_date:
-            default: "NONE"
-        clear_when_present:
-          closing_year_month: "reference_date"
 
   - code: "COMPOSITE_CONVERSION"
     name: "복합환산조회"

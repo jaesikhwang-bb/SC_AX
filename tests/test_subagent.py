@@ -169,13 +169,15 @@ class PerformanceFeeSubagentTest(unittest.IsolatedAsyncioTestCase):
         output_model = _create_output_model(self.bundle)
         structured = output_model.model_validate(
             {
-                "scenario_code": "FEE_DETAILS",
-                "detail_scenario_code": "WITHHOLDING_TAX",
-                "parameters": {
-                    "closing_year_month": None,
-                    "reference_date": None,
-                    "reference_year": None,
-                },
+                "matches": [{
+                    "scenario_code": "FEE_DETAILS",
+                    "detail_scenario_code": "WITHHOLDING_TAX",
+                    "parameters": {
+                        "closing_year_month": None,
+                        "reference_date": None,
+                        "reference_year": None,
+                    },
+                }],
             }
         )
 
@@ -211,14 +213,16 @@ class PerformanceFeeSubagentTest(unittest.IsolatedAsyncioTestCase):
         output_model = _create_output_model(self.bundle)
         structured = output_model.model_validate(
             {
-                # 첨부 Traceback과 같은 잘못된 부모·자식 조합을 의도적으로 만든다.
-                "scenario_code": "PERFORMANCE_SUMMARY",
-                "detail_scenario_code": "WITHHOLDING_TAX",
-                "parameters": {
-                    "closing_year_month": None,
-                    "reference_date": None,
-                    "reference_year": None,
-                },
+                "matches": [{
+                    # 잘못된 부모·자식 조합을 의도적으로 만든다.
+                    "scenario_code": "PERFORMANCE_SUMMARY",
+                    "detail_scenario_code": "WITHHOLDING_TAX",
+                    "parameters": {
+                        "closing_year_month": None,
+                        "reference_date": None,
+                        "reference_year": None,
+                    },
+                }],
             }
         )
         agent = object.__new__(ScenarioSubagent)
@@ -242,6 +246,58 @@ class PerformanceFeeSubagentTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("FEE_DETAILS", result.scenario_code)
         self.assertEqual("WITHHOLDING_TAX", result.detail_scenario_code)
+
+    async def test_manifest_rule_completes_performance_and_fee_matches(
+        self,
+    ) -> None:
+        """LLM이 하나만 골라도 실적+수수료 질문은 두 match를 보장한다."""
+
+        output_model = _create_output_model(self.bundle)
+        structured = output_model.model_validate(
+            {
+                # 의도적으로 LLM이 실적 하나만 반환한 상황을 재현한다.
+                "matches": [{
+                    "scenario_code": "PERFORMANCE_SUMMARY",
+                    "detail_scenario_code": "PERFORMANCE_SUMMARY_TOTAL",
+                    "parameters": {
+                        "closing_year_month": None,
+                        "reference_date": None,
+                        "reference_year": None,
+                    },
+                }],
+            }
+        )
+        agent = object.__new__(ScenarioSubagent)
+        agent._bundle = self.bundle
+        agent._output_model = output_model
+        agent._scenario_by_code = {
+            scenario["code"]: scenario
+            for scenario in self.bundle.manifest["scenarios"]
+        }
+        agent._detail_by_code = {
+            detail["code"]: (scenario, detail)
+            for scenario in self.bundle.manifest["scenarios"]
+            for detail in scenario["details"]
+        }
+        agent._chain = FakeStructuredChain(structured)
+
+        result = await agent.classify(
+            "내 실적과 수수료가 궁금해",
+            today=date(2026, 8, 3),
+        )
+
+        self.assertEqual(
+            ["PERFORMANCE_SUMMARY_TOTAL", "FEE_ITEM_DETAILS"],
+            [match.detail_scenario_code for match in result.matches],
+        )
+        self.assertEqual(
+            "202608",
+            result.matches[0].parameters["closing_year_month"],
+        )
+        self.assertEqual(
+            "202607",
+            result.matches[1].parameters["closing_year_month"],
+        )
 
     async def test_master_hitl_then_runs_performance_fee_subagent(self) -> None:
         """코드 불일치 승인 후 PERFORMANCE_FEE 서브에이전트를 실행해야 한다."""

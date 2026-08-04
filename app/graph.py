@@ -38,6 +38,7 @@ class MasterState(TypedDict, total=False):
     classification: dict[str, Any]
     subagent: dict[str, Any] | None
     mcp: dict[str, Any] | None
+    mcp_results: list[dict[str, Any]]
     # Redis에 저장된 대기 유형이다. HITL 재진입 시 START 조건부 Edge가 이 값을
     # 사용해 유형별 검증 노드로 직접 분기한다.
     hitl_type: str
@@ -57,6 +58,7 @@ class MasterResult:
     interrupt: dict | None = None
     subagent: SubagentResult | None = None
     mcp: McpExecutionResult | None = None
+    mcp_results: list[McpExecutionResult] | None = None
 
 
 class MasterIntentGraph:
@@ -202,18 +204,28 @@ class MasterIntentGraph:
 
     @timed("Redis 대화이력 조회")
     async def _load_history(self, state: MasterState) -> MasterState:
-        """프론트가 선택한 에이전트와 동일한 범위의 이력만 조회한다."""
+        """선택 에이전트 또는 conversation의 최근 에이전트 이력을 조회한다."""
 
         frontend_code = state.get("frontend_agent_code")
         if frontend_code is None:
-            # 에이전트를 선택하지 않은 시점에는 어떤 agent_code의 Redis 키를
-            # 조회해야 하는지 확정할 수 없다. 다른 에이전트 이력을 섞지 않도록
-            # 빈 이력으로 1차 분류하고, 결과는 최종 분류 코드 범위에 저장한다.
-            logger.info(
-                "======== Redis 이력 조회 생략 | 프론트 에이전트 미선택 | "
-                "이전대화=빈 이력"
+            # 프론트에서 에이전트를 선택하지 않았더라도 같은 conversation의
+            # 멀티턴 문맥은 유지해야 한다. 가장 최근에 사용한 에이전트 하나를
+            # 선택하여 그 범위의 이력만 읽으므로 서로 다른 에이전트 이력은
+            # 섞이지 않는다.
+            recent_agent_code, history = (
+                await self._history_store.get_recent_for_conversation(
+                    state["employee_id"],
+                    state["conversation_id"],
+                    self._history_limit,
+                )
             )
-            update: MasterState = {"history": []}
+            logger.info(
+                "======== Redis 이력 조회 완료 | 프론트 에이전트 미선택 | "
+                "최근에이전트=%s | 조회개수=%d",
+                recent_agent_code or "없음",
+                len(history),
+            )
+            update: MasterState = {"history": history}
             self._trace_recorder.record("대화이력조회완료", {**state, **update})
             return update
 
@@ -607,13 +619,29 @@ class MasterIntentGraph:
             return {"mcp": None}
         subagent = SubagentResult.model_validate(subagent_data)
         started_at = perf_counter()
+        results: list[McpExecutionResult] = []
         try:
-            result = await self._mcp_executor.execute(
-                subagent=subagent,
-                employee_id=state["employee_id"],
-                conversation_id=state["conversation_id"],
-                thread_id=state["thread_id"],
-            )
+            for match in subagent.matches:
+                # 기존 실행기 계약을 유지하면서 각 매칭을 독립된 단일 결과로
+                # 변환해 manifest의 MCP 도구를 차례대로 실행한다.
+                single = SubagentResult(
+                    agent_code=subagent.agent_code,
+                    prompt_version=subagent.prompt_version,
+                    scenario_code=match.scenario_code,
+                    scenario_name=match.scenario_name,
+                    detail_scenario_code=match.detail_scenario_code,
+                    detail_scenario_name=match.detail_scenario_name,
+                    parameters=match.parameters,
+                    matches=[match],
+                )
+                result = await self._mcp_executor.execute(
+                    subagent=single,
+                    employee_id=state["employee_id"],
+                    conversation_id=state["conversation_id"],
+                    thread_id=state["thread_id"],
+                )
+                if result is not None:
+                    results.append(result)
         except Exception as exc:
             self._trace_recorder.record(
                 "MCP도구호출오류",
@@ -622,20 +650,26 @@ class MasterIntentGraph:
                 error=exc,
             )
             raise
-        if result is None:
+        if not results:
             logger.info(
-                "======== MCP 실행 결과 없음 | 에이전트=%s | 세부시나리오=%s",
+                "======== MCP 실행 결과 없음 | 에이전트=%s | 매칭개수=%d",
                 subagent.agent_code,
-                subagent.detail_scenario_code,
+                len(subagent.matches),
             )
-            return {"mcp": None}
+            return {"mcp": None, "mcp_results": []}
         logger.info(
-            "======== MCP 실행 완료 | 도구=%s | 추적ID=%s | 성공=%s",
-            result.tool_name,
-            result.request_id,
-            result.succeeded,
+            "======== MCP 다중 실행 완료 | 실행개수=%d | 도구=%s | 성공=%s",
+            len(results),
+            [result.tool_name for result in results],
+            [result.succeeded for result in results],
         )
-        update = {"mcp": result.model_dump(mode="json")}
+        serialized_results = [
+            result.model_dump(mode="json") for result in results
+        ]
+        update = {
+            "mcp": serialized_results[0],
+            "mcp_results": serialized_results,
+        }
         # 현재 executor가 manifest에서 실제 tool_name을 결정하므로 실행 결과가
         # 만들어진 직후에 선택 행을 남겨야 정확한 도구명이 CSV에 포함된다.
         self._trace_recorder.record("MCP도구선택완료", {**state, **update})
@@ -721,8 +755,21 @@ class MasterIntentGraph:
             HitlStateStoreUnavailableError,
         ),
     )
-    async def resume(self, *, thread_id: str, value: Any) -> MasterResult:
-        """일반 Redis 상태를 복원해 HITL 검증 Edge부터 새로 실행한다."""
+    async def resume(
+        self,
+        *,
+        thread_id: str,
+        value: Any,
+        expected_employee_id: str | None = None,
+        expected_conversation_id: str | None = None,
+    ) -> MasterResult:
+        """일반 Redis 상태를 복원해 HITL 검증 Edge부터 새로 실행한다.
+
+        스트리밍 API는 요청의 사원번호와 session_id를 함께 전달한다. Redis에
+        저장된 원래 요청 범위와 다르면 상태 존재 여부를 노출하지 않고 찾을 수
+        없는 상태와 동일하게 처리한다. 기존 JSON API는 호환을 위해 두 검증값을
+        생략할 수 있다.
+        """
 
         logger.info(
             "======== Redis HITL 재개 시작 | thread_id=%s | 입력=%s",
@@ -731,6 +778,26 @@ class MasterIntentGraph:
         )
         entry = await self._hitl_store.get(thread_id)
         if entry is None:
+            raise HitlStateNotFoundError(thread_id)
+
+        stored_employee_id = entry.graph_state.get("employee_id")
+        stored_conversation_id = entry.graph_state.get("conversation_id")
+        if (
+            expected_employee_id is not None
+            and stored_employee_id != expected_employee_id
+        ) or (
+            expected_conversation_id is not None
+            and stored_conversation_id != expected_conversation_id
+        ):
+            logger.info(
+                "======== Redis HITL 범위 불일치 | thread_id=%s | "
+                "요청사원=%s | 저장사원=%s | 요청session=%s | 저장session=%s",
+                thread_id,
+                expected_employee_id,
+                stored_employee_id,
+                expected_conversation_id,
+                stored_conversation_id,
+            )
             raise HitlStateNotFoundError(thread_id)
 
         restored_state: MasterState = dict(entry.graph_state)
@@ -767,6 +834,7 @@ class MasterIntentGraph:
         interrupt = state.get("interrupt")
         subagent_data = state.get("subagent")
         mcp_data = state.get("mcp")
+        mcp_results_data = state.get("mcp_results", [])
         logger.info(
             "======== 그래프 결과 변환 | 상태=%s | thread_id=%s",
             status,
@@ -787,4 +855,8 @@ class MasterIntentGraph:
                 if mcp_data is not None
                 else None
             ),
+            mcp_results=[
+                McpExecutionResult.model_validate(item)
+                for item in mcp_results_data
+            ],
         )

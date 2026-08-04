@@ -99,7 +99,7 @@ class McpToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result)
         self.assertEqual("test_tool", result.tool_name)
         self.assertEqual(
-            "acqsc:EMP001:conversation-001:thread-001",
+            "acqsc:EMP001:conversation-001:thread-001:FEE_TAX_NET_PAYMENT",
             result.request_id,
         )
         self.assertEqual(
