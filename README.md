@@ -888,6 +888,11 @@ RP가 해당 공통 업무를 지원하므로 정상 분류되면 HITL 없이 �
 API는 이전 테스트와 소비자 호환을 위해 유지합니다. 두 경로는 같은 LangGraph,
 Redis 이력, HITL 상태, 서브에이전트 및 MCP 실행기를 공유합니다.
 
+프론트 개발자에게 전달할 요청 제약조건, 전체 이벤트 JSON 구조, `action` 입력
+연동, 오류 처리 및 JavaScript 수신 예시는 다음 별도 문서에 정리되어 있습니다.
+
+- [`docs/STREAMING_CHAT_API_SPEC.md`](docs/STREAMING_CHAT_API_SPEC.md)
+
 ### 입력 필드
 
 | 필드 | 타입 | 신규 질문 | HITL 재진입 | 설명 |
