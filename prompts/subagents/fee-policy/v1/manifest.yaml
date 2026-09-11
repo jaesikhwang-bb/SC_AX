@@ -1,0 +1,37 @@
+version: "1.1.1"
+released_at: "2026-09-09"
+agent_code: "FEE_POLICY"
+
+prompt_files:
+  - "scenarios/01_fee_conversion_criteria.md"
+  - "system.md"
+
+model:
+  temperature: 0
+
+parameter_definitions:
+  rag_query:
+    description: "마스터 보정 질문에서 수수료·환산점수 정책 요청만 분리해 만든 독립적인 문서 검색 질문. 원래 의미와 상품·판매유형·유치조직 표현을 유지하고 새 조건을 추가하지 않음"
+  keywords:
+    value_type: "string_list"
+    min_items: 1
+    max_items: 10
+    description: "수수료·환산점수 정책 문서 검색에 사용할 카드명·판매유형·유치조직·기준 항목 중심의 핵심 키워드 배열"
+
+scenarios:
+  - code: "FEE_POLICY_DOCUMENTS"
+    name: "수수료·환산점수 기준 문서 조회"
+    description: "카드 상품·유치조직·복합판매·판매 부가서비스 유형별 모집인 수수료율, 환산점수, 실적 인정 조건과 반영 시점을 문서에서 조회"
+    details:
+      - code: "FEE_CONVERSION_CRITERIA"
+        name: "수수료·환산점수 기준 조회"
+        description: "실제 지급 내역이 아닌 상품·유치조직·복합판매·가족카드·리볼빙·간편결제·하이패스·모니모·쇼핑케어 등의 수수료 및 환산 정책 조회"
+        parameters:
+          - "rag_query"
+          - "keywords"
+        recommended_questions:
+          - "이 카드 신규 발급은 몇 점으로 환산돼?"
+          - "아파트관리비 연결 실적 인정 기준을 알려줘"
+          - "일반SC와 제휴SC의 수수료 반영 비율을 알려줘"
+          - "연회비 없는 카드를 팔아도 모집인 실적으로 인정돼?"
+          - "복합 모집인이 이 카드를 판매할 수 있어?"

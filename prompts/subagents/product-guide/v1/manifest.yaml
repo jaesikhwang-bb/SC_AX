@@ -1,0 +1,37 @@
+version: "1.1.0"
+released_at: "2026-09-09"
+agent_code: "PRODUCT_GUIDE"
+
+prompt_files:
+  - "scenarios/01_card_product_guide.md"
+  - "system.md"
+
+model:
+  temperature: 0
+
+parameter_definitions:
+  rag_query:
+    description: "마스터 보정 질문에서 카드 상품 정보 요청만 분리해 만든 독립적인 문서 검색 질문. 카드명·혜택·비교 대상을 유지하고 새로운 조건을 추가하지 않음"
+  keywords:
+    value_type: "string_list"
+    min_items: 1
+    max_items: 10
+    description: "카드 상품 문서 검색에 사용할 카드명·혜택 영역·연회비·상품 조건 중심의 핵심 키워드 배열"
+
+scenarios:
+  - code: "PRODUCT_GUIDE_DOCUMENTS"
+    name: "카드 상품 안내 문서 조회"
+    description: "카드 상품의 혜택·연회비·전월 이용실적 조건과 제외 매출·발급 로고·가족카드 제공 여부·추천·비교 정보를 문서에서 조회"
+    details:
+      - code: "CARD_PRODUCT_GUIDE_SEARCH"
+        name: "카드 상품 안내"
+        description: "카드별 혜택과 연회비, 전월 이용실적 조건과 제외 매출, 발급 로고, 가족카드 제공 여부, 추천 및 비교 안내"
+        parameters:
+          - "rag_query"
+          - "keywords"
+        recommended_questions:
+          - "주유 할인이 좋은 카드를 추천해줘"
+          - "두 카드의 혜택과 연회비를 비교해줘"
+          - "이 카드가 가족카드를 제공하는지 알려줘"
+          - "이 카드의 전월실적 제외 매출을 알려줘"
+          - "이 카드를 VISA로 발급할 수 있어?"

@@ -1,0 +1,94 @@
+version: "1.8.1"
+released_at: "2026-09-09"
+agent_code: "QUALIFICATION"
+
+prompt_files:
+  - "scenarios/01_personal_member_qualification.md"
+  - "scenarios/02_family_card_qualification.md"
+  - "scenarios/03_fixed_guidance.md"
+  # 세부 설명을 모두 읽은 다음 최종 경계·출력 규칙을 적용한다.
+  - "system.md"
+
+model:
+  temperature: 0
+
+parameter_definitions:
+  member_category:
+    description: "개인회원 유형. 신규회원은 NEW_MEMBER, 외국인은 FOREIGNER, 미성년자는 MINOR. 개인회원 질문에서 유형이 불명확하면 NEW_MEMBER"
+    allowed_values:
+      - "NEW_MEMBER"
+      - "FOREIGNER"
+      - "MINOR"
+  rag_query:
+    description: "마스터 보정 질문에서 현재 세부 시나리오에 해당하는 요청만 분리해 만든 독립적인 Databricks 검색 질문. 원래 의미를 유지하고 새로운 조건을 추가하지 않음"
+  keywords:
+    value_type: "string_list"
+    min_items: 1
+    max_items: 10
+    description: "선택한 자격기준 세부 시나리오의 Databricks 하이브리드 검색에 사용할 핵심 업무 키워드 배열. 마스터 보정 질문을 그대로 복제하지 말고 대상·조건·문서유형 중심으로 1~10개 추출"
+
+scenarios:
+  - code: "PERSONAL_MEMBER_QUALIFICATION"
+    name: "개인회원 입회 자격기준"
+    description: "신규회원·외국인·미성년자 개인회원 입회 자격기준 조회"
+    details:
+      - code: "NEW_MEMBER_QUALIFICATION"
+        name: "신규회원 입회 자격기준"
+        description: "일반 신규 개인회원의 직업·소득·예금·보험·재산·배우자·신용상태별 입회 가능 조건, 증빙서류와 제한 기준 조회"
+        parameters:
+          - "member_category"
+          - "rag_query"
+          - "keywords"
+        parameter_defaults:
+          member_category: "NEW_MEMBER"
+        recommended_questions:
+          - "신규회원 입회 제한 조건을 알려줘"
+          - "신규회원에게 필요한 서류를 알려줘"
+      - code: "FOREIGNER_QUALIFICATION"
+        name: "외국인 입회 자격기준"
+        description: "외국인 개인회원의 체류자격·본인확인·입회 조건 조회"
+        parameters:
+          - "member_category"
+          - "rag_query"
+          - "keywords"
+        parameter_defaults:
+          member_category: "FOREIGNER"
+        recommended_questions:
+          - "외국인 회원에게 필요한 서류를 알려줘"
+          - "외국인 회원의 본인확인 기준을 알려줘"
+      - code: "MINOR_QUALIFICATION"
+        name: "미성년자 입회 자격기준"
+        description: "미성년자 개인회원의 연령·법정대리인·입회 조건 조회"
+        parameters:
+          - "member_category"
+          - "rag_query"
+          - "keywords"
+        parameter_defaults:
+          member_category: "MINOR"
+        recommended_questions:
+          - "미성년자 회원에게 필요한 서류를 알려줘"
+          - "법정대리인 동의 기준을 알려줘"
+
+  - code: "FAMILY_CARD_QUALIFICATION"
+    name: "가족카드 발급 및 자격기준"
+    description: "가족카드 신청 대상·가족관계·연령·발급 제한 기준 조회"
+    details:
+      - code: "FAMILY_CARD_ISSUANCE_QUALIFICATION"
+        name: "가족카드 발급 및 자격기준 조회"
+        description: "가족카드 발급 범위와 신청 자격 및 제한 조건 조회"
+        parameters:
+          - "rag_query"
+          - "keywords"
+        recommended_questions:
+          - "가족카드 신청에 필요한 서류를 알려줘"
+          - "가족카드 발급 제한 조건을 알려줘"
+
+  - code: "QUALIFICATION_FIXED_GUIDANCE"
+    name: "자격기준 관련 고정 안내"
+    description: "문서나 데이터를 조회하지 않고 정해진 담당 경로를 안내하는 문의"
+    details:
+      - code: "PROVISIONAL_DISPOSITION_GUIDANCE"
+        name: "고객 가처분 대상 여부 문의 안내"
+        description: "업무상 가처분 문의: 모집인이 특정 고객이 업무상 가처분 대상인지 확인·판정해 달라는 요청에 고정 안내 제공. 신규입회 자격기준·일반 소득증빙 대상 선정 기준·인정서류 문의는 해당 개인회원 문서 조회이며 이 코드에 포함하지 않는다. 법적 가처분·압류를 뜻하지 않는다. 반드시 특정 고객의 가처분 대상 여부를 명확히 물어야 한다. 소득증빙 문의를 가처분으로 추론하지 않는다."
+        parameters: []
+        recommended_questions: []

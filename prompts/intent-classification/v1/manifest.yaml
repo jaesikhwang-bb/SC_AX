@@ -1,0 +1,18 @@
+version: "1.6.5"
+released_at: "2026-09-10"
+
+router:
+  refinement_prompt: "router/refinement.md"
+  system_prompt: "router/system.md"
+  agents_prompt: "router/agents.md"
+
+agent_code:
+  - "performance_fee"
+  - "fee_policy"
+  - "qualification"
+  - "rp"
+  - "product_guide"
+  - "tablet"
+
+model:
+  temperature: 0

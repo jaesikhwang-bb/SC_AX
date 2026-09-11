@@ -1,0 +1,9 @@
+fastapi
+httpx
+langchain-core>=0.3.15,<0.4
+langchain-openai==0.2.5
+langgraph>=0.2,<0.3
+langfuse==4.14.0
+PyYAML
+redis
+uvicorn[standard]

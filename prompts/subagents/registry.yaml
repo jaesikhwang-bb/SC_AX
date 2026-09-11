@@ -1,0 +1,21 @@
+subagents:
+  PERFORMANCE_FEE:
+    directory: "performance-fee"
+    enabled: true
+  RP:
+    directory: "rp"
+    enabled: true
+  QUALIFICATION:
+    directory: "qualification"
+    enabled: true
+  # 아래 3개는 프롬프트와 구조화 출력 계약만 준비된 상태다.
+  # Python MCP/RAG handler 또는 고정답변을 구현한 뒤 enabled를 true로 바꾼다.
+  FEE_POLICY:
+    directory: "fee-policy"
+    enabled: false
+  PRODUCT_GUIDE:
+    directory: "product-guide"
+    enabled: false
+  TABLET:
+    directory: "tablet"
+    enabled: false

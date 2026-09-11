@@ -1,0 +1,25 @@
+version: "1.1.0"
+released_at: "2026-09-09"
+
+rag_system_prompt: "rag/system.md"
+answerability_system_prompt: "rag/answerability.md"
+
+model:
+  temperature: 0
+
+# 에이전트별 최종 답변 생성 방식이다.
+# fixed_data: MCP 조회 dict를 정해진 형식으로 출력
+# rag: MCP 조회 dict를 참고 문서로 사용하여 LLM이 답변 생성
+agent_response_modes:
+  PERFORMANCE_FEE: "fixed_data"
+  FEE_POLICY: "rag"
+  QUALIFICATION: "rag"
+  RP: "fixed_data"
+  PRODUCT_GUIDE: "rag"
+  TABLET: "rag"
+
+default_response_mode: "fixed_data"
+
+exception_answers:
+  EMPTY_QUERY: "질문 내용을 확인할 수 없습니다. 조회하거나 문의할 내용을 구체적으로 입력해 주세요."
+  OUT_OF_SCOPE: "카드 모집인 업무와 관련된 질문을 입력해 주세요."

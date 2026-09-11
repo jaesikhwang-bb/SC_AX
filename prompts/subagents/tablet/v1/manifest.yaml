@@ -1,0 +1,60 @@
+version: "1.0.1"
+released_at: "2026-09-09"
+agent_code: "TABLET"
+
+prompt_files:
+  - "scenarios/01_tablet_issue.md"
+  - "scenarios/02_greeting_message_confirmation.md"
+  - "scenarios/03_password_management.md"
+  - "system.md"
+
+model:
+  temperature: 0
+
+parameter_definitions:
+  rag_query:
+    description: "마스터 보정 질문에서 태블릿 오류·조작 요청만 분리해 만든 독립적인 문서 검색 질문. 화면 문구와 변경 항목을 유지하고 새로운 원인을 추가하지 않음"
+  keywords:
+    value_type: "string_list"
+    min_items: 1
+    max_items: 10
+    description: "태블릿 문서 검색에 사용할 오류 문구·오류코드·화면명·처리 단계·조작 대상 중심의 핵심 키워드 배열"
+
+scenarios:
+  - code: "TABLET_SUPPORT_DOCUMENTS"
+    name: "태블릿 오류 및 접수 조작 안내"
+    description: "태블릿과 카드 접수 업무 화면의 인증·전송·서명·시스템 오류 및 접수 진행 중 카드·기능 변경 방법을 문서에서 조회"
+    details:
+      - code: "TABLET_ISSUE"
+        name: "태블릿 오류 및 접수 조작 안내"
+        description: "카드 접수 업무 화면의 오류·알림·처리 실패 해결 또는 접수 진행 중 카드·기능 변경 방법 안내"
+        parameters:
+          - "rag_query"
+          - "keywords"
+        recommended_questions:
+          - "태블릿에서 실명인증 오류가 나요"
+          - "접수 중인 카드를 해외용으로 변경하고 싶어요"
+
+  - code: "TABLET_FIXED_GUIDANCE"
+    name: "태블릿 상태 및 비밀번호 고정 안내"
+    description: "신규 안내 멘트·접수 상태 확인과 비밀번호 변경·초기화 고정 안내"
+    details:
+      - code: "GREETING_MESSAGE_CONFIRMATION"
+        name: "신규 안내 멘트 및 접수 상태 확인"
+        description: "접수 완료 멘트의 의미 또는 현재 접수 고객의 실제 신규·기존 상태 확인"
+        parameters: []
+        recommended_questions:
+          - "환영합니다 멘트는 무슨 뜻이야?"
+          - "이 고객 신규야?"
+      - code: "PASSWORD_CHANGE"
+        name: "태블릿 비밀번호 변경 안내"
+        description: "로그인 가능한 상태에서 비밀번호 변경 방법 또는 90일 경과 안내 처리"
+        parameters: []
+        recommended_questions:
+          - "태블릿 비밀번호 변경 방법을 알려줘"
+      - code: "PASSWORD_RESET"
+        name: "태블릿 비밀번호 초기화 안내"
+        description: "로그인 불가 상태에서 비밀번호 초기화 방법 안내"
+        parameters: []
+        recommended_questions:
+          - "비밀번호가 맞지 않아 로그인할 수 없어"

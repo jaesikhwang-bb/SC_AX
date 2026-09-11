@@ -1,0 +1,206 @@
+version: "2.1.0"
+released_at: "2026-09-11"
+agent_code: "PERFORMANCE_FEE"
+
+prompt_files:
+  - "scenarios/01_performance_summary.md"
+  - "scenarios/02_composite_conversion.md"
+  - "scenarios/03_unregistered_member.md"
+  - "scenarios/04_disposal_fee.md"
+  - "scenarios/05_fee_details.md"
+  - "scenarios/06_information_inquiry.md"
+  - "scenarios/07_access_restriction.md"
+  # 세부 설명을 모두 읽은 다음 최종 경계·출력 규칙을 적용한다.
+  - "system.md"
+
+model:
+  temperature: 0
+
+# LLM이 복합 질문에서 일부 match를 누락해도 선언된 업무 조합을 보장한다.
+# Python 코드에는 업무 키워드나 시나리오 코드를 하드코딩하지 않는다.
+required_match_rules:
+  - name: "실적과 일반 수수료 동시 조회"
+    all_terms:
+      - "실적"
+      - "수수료"
+    skip_if_selected_detail_codes:
+      - "FEE_PAYMENT_DATE_GUIDANCE"
+      - "FEE_FAX_UNAVAILABLE_GUIDANCE"
+      - "FEE_LONG_TERM_HISTORY_GUIDANCE"
+      - "FEE_DETAIL_GUIDANCE"
+      - "CUSTOMER_WITHDRAWAL_REQUEST"
+      - "CUSTOMER_CONVERSION_REQUEST"
+      - "CUSTOMER_UNREGISTERED_IDENTITY_REQUEST"
+      - "OTHER_RECRUITER_DATA_REQUEST"
+      - "CUSTOMER_DISPOSAL_REASON_REQUEST"
+      - "CUSTOMER_SALES_PERFORMANCE_REQUEST"
+      - "CUSTOMER_PERFORMANCE_DETAIL_REQUEST"
+    detail_codes:
+      - "PERFORMANCE_SUMMARY_TOTAL"
+      - "FEE_ITEM_DETAILS"
+
+parameter_definitions:
+  closing_year_month:
+    description: "마감작업년월. 반드시 YYYYMM 형식이며 질문에 없으면 null"
+    pattern: "^[0-9]{6}$"
+  reference_date:
+    description: "기준일자. 반드시 YYYYMMDD 형식이며 질문에 없으면 null"
+    pattern: "^[0-9]{8}$"
+  reference_year:
+    description: "기준년도. 반드시 YYYY 형식이며 질문에 없으면 null"
+    pattern: "^[0-9]{4}$"
+  fax_number:
+    description: "원천징수 내역을 받을 팩스번호. 질문에 없으면 null"
+    pattern: "^[0-9-]{9,13}$"
+
+scenarios:
+  - code: "PERFORMANCE_SUMMARY"
+    name: "실적 종합조회"
+    description: "로그인한 카드 모집인 본인의 환산점수와 실적건수를 조회"
+    details:
+      - code: "PERFORMANCE_SUMMARY_TOTAL"
+        name: "실적 종합 조회"
+        description: "로그인한 카드 모집인 본인의 총·신규·무실적·복합·폐기 환산점수, 발급 건수와 복합 모집인의 카드 가동 여부를 종합 조회"
+        parameters:
+          - "closing_year_month"
+          - "reference_date"
+        recommended_questions:
+          - "이번 달 실적 항목별 내역도 보여줘"
+          - "지난달 실적과 비교해줘"
+
+  - code: "COMPOSITE_CONVERSION"
+    name: "복합환산조회"
+    description: "복합판매구분코드별 환산점수와 실적 미반영 카드 내역 조회"
+    details:
+      - code: "COMPOSITE_CONVERSION_SCORE"
+        name: "복합판매 구분코드별 환산점수 및 실적 건수 조회"
+        description: "복합판매 구분코드별 환산점수와 실적 건수를 조회"
+        parameters:
+          - "closing_year_month"
+          - "reference_date"
+        recommended_questions:
+          - "복합환산에서 제외된 내역도 알려줘"
+          - "지난달 복합환산 점수와 비교해줘"
+      - code: "COMPOSITE_CONVERSION_EXCLUDED"
+        name: "환산 미반영 내역 조회"
+        description: "자동이체 미연결, 자동차 연계, 탈회, 삼성전자 매출 등 실적 제외 내역 조회"
+        parameters:
+          - "closing_year_month"
+        recommended_questions:
+          - "복합판매 구분별 환산점수도 보여줘"
+          - "지난달 환산 미반영 내역과 비교해줘"
+        # MCP 호출 방식은 YAML이 아니라
+        # app/mcp/scenarios/performance_fee.py의
+        # composite_conversion_excluded()에서 전부 제어한다.
+
+  - code: "UNREGISTERED_MEMBER"
+    name: "미등록 회원 조회"
+    description: "미등록 회원 폐기 예정 현황과 유형별 건수 조회"
+    details:
+      - code: "UNREGISTERED_MEMBER_SUMMARY"
+        name: "미등록 회원 현황 조회"
+        description: "카드발급, 업체인계, 카드반송, 타인수령 등 유형별 건수 조회"
+        parameters:
+          - "closing_year_month"
+        recommended_questions:
+          - "지난달 미등록 회원 현황과 비교해줘"
+
+  - code: "DISPOSAL_FEE"
+    name: "폐기 수수료 조회"
+    description: "폐기 유형별 건수와 회입점수 및 회입수수료 조회"
+    details:
+      - code: "DISPOSAL_FEE_SUMMARY"
+        name: "폐기 환산 및 회입 수수료 조회"
+        description: "카드 모집인의 폐기·회입 건수, 회입점수, 폐기·회입 수수료와 차감 예정 조회. 단순 폐기환산 점수는 실적 종합 조회"
+        parameters:
+          - "closing_year_month"
+        recommended_questions:
+          - "지난달 폐기 회입수수료와 비교해줘"
+
+  - code: "FEE_DETAILS"
+    name: "수수료 내역 조회"
+    description: "로그인한 카드 모집인 본인이 실제 지급받은 항목별 수수료·세금·공제·실지급액과 원천징수 내역 조회"
+    details:
+      - code: "FEE_ITEM_DETAILS"
+        name: "항목별 수수료 조회"
+        description: "카드 모집인 본인에게 실제 지급된 총수수료, 세금·공제, 실지급액과 발급·활동·영업활동·증원·팀장·효율·이용·장기효율·회입 수수료 등 항목별 조회"
+        parameters:
+          - "closing_year_month"
+        recommended_questions:
+          - "지난달 세금과 최종 실지급액도 알려줘"
+      - code: "WITHHOLDING_TAX"
+        name: "원천징수 내역 조회"
+        description: "카드 모집인 본인의 기준년도 원천징수 내역 조회"
+        parameters:
+          - "reference_year"
+        recommended_questions:
+          - "원천징수 내역을 팩스로 보내줘"
+          - "지난달 수수료 세금과 실지급액을 알려줘"
+          - "전년도 원천징수 내역도 보여줘"
+      - code: "WITHHOLDING_TAX_FAX_SEND"
+        name: "원천징수 내역 팩스 전송"
+        description: "원천징수 조회와 독립적으로 팩스번호를 입력받아 MCP 전송 도구를 실행"
+        parameters:
+          - "reference_year"
+          - "fax_number"
+        recommended_questions:
+          - "원천징수 내역을 다시 조회해줘"
+          - "다른 팩스번호로 다시 전송해줘"
+        # action code/message/inputs/validation과 MCP 실행 정책은 전부
+        # app/mcp/scenarios/performance_fee.py의
+        # _withholding_tax_fax_number_action(), withholding_tax_fax_send()에서 제어한다.
+
+  - code: "INFORMATION_INQUIRY"
+    name: "수수료 고정 안내"
+    description: "수수료 지급일, 일반 수수료 팩스 발송 불가, 장기 수수료 내역처럼 명시적으로 지원하는 고정 안내"
+    details:
+      - code: "FEE_DETAIL_GUIDANCE"
+        name: "수수료 항목 설명 및 이상 문의 안내"
+        description: "기타수수료 등 지급 항목의 의미, 효율수수료 이상 등 설명 문의. 실제 월별 금액 조회와 구분"
+        parameters: []
+      - code: "FEE_PAYMENT_DATE_GUIDANCE"
+        name: "수수료 지급일 안내"
+        description: "급여·월급·수당·수수료가 지급되는 날짜나 시기를 묻는 문의"
+        parameters: []
+      - code: "FEE_FAX_UNAVAILABLE_GUIDANCE"
+        name: "일반 수수료 내역 팩스 발송 불가 안내"
+        description: "원천징수가 아닌 일반 수수료 내역을 팩스로 보내 달라는 문의"
+        parameters: []
+      - code: "FEE_LONG_TERM_HISTORY_GUIDANCE"
+        name: "장기 수수료 내역 안내"
+        description: "월별 조회 범위를 넘어 연간·최근 12개월 수수료 합계나 추이를 묻는 문의"
+        parameters: []
+
+  - code: "ACCESS_RESTRICTION"
+    name: "개인별 상세정보 조회 제한"
+    description: "다른 모집인의 실적·수수료 또는 특정 고객의 실적·환산·미등록·폐기·회입·수수료 관련 개인별 요청에 고정 답변 제공"
+    details:
+      - code: "OTHER_RECRUITER_DATA_REQUEST"
+        name: "다른 모집인 정보 조회 제한"
+        description: "로그인한 모집인 본인이 아닌 다른 모집인의 개인별 업무 데이터 조회 요청"
+        parameters: []
+      - code: "CUSTOMER_DISPOSAL_REASON_REQUEST"
+        name: "고객 폐기 여부·사유 조회 제한"
+        description: "고객 폐기·회입 사유, 폐기 시기와 대상 식별 요청. 이름 없이 폐기 사유·회입 사유만 물어도 포함. 카드 탈회 이력은 별도 detail"
+        parameters: []
+      - code: "CUSTOMER_SALES_PERFORMANCE_REQUEST"
+        name: "고객 매출실적 조회 제한"
+        description: "고객 자동차·차량·삼성전자 구매가 환산·회입·수수료에 미치는 영향, 구매 시기 및 고객 매출 확인 요청"
+        parameters: []
+      - code: "CUSTOMER_PERFORMANCE_DETAIL_REQUEST"
+        name: "기타 고객 실적 상세 조회 제한"
+        description: "식별 가능한 고객 또는 고객 목록의 환산·미반영·미등록 등 PERFORMANCE_FEE 관련 상세정보 요청"
+        parameters: []
+
+      - code: "CUSTOMER_WITHDRAWAL_REQUEST"
+        name: "고객 카드 탈회 이력 안내"
+        description: "특정 고객 카드 탈회 여부·이력·사유 확인. 폐기·회입 사유와 구분"
+        parameters: []
+      - code: "CUSTOMER_CONVERSION_REQUEST"
+        name: "고객별 환산 반영 확인 제한"
+        description: "특정 고객의 관리비·가스·통신·전기·사회보험 등 점수와 환산 반영 여부 확인"
+        parameters: []
+      - code: "CUSTOMER_UNREGISTERED_IDENTITY_REQUEST"
+        name: "미등록 고객 식별 정보 안내"
+        description: "미등록·타인수령·미수령·업체인계 고객의 이름이나 누구인지 묻는 추가 문의"
+        parameters: []

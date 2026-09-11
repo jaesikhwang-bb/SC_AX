@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.env
+.env.*
+!.env.example
+
+# Local secrets and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+service-account*.json
+*_credentials.json
+*_secrets.json
+
+# Tool-specific local settings
+.claude/settings.local.json
+
+# Local datasets
+datasets/
+
+# 실행 중 생성되는 질의별 CSV 진단 파일
+data/intent_traces/
